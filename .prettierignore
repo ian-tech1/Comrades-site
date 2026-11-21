@@ -1,0 +1,2 @@
+# Vercel may normalize deployment config during builds; its contents are checked in tests.
+vercel.json

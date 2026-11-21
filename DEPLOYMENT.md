@@ -26,11 +26,11 @@ Import the GitHub repository and set:
 
 - **Root Directory:** repository root (the folder containing `package.json`, `vercel.json`, and `public/`).
 - **Framework Preset:** Other.
-- **Node.js Version:** 22.x or later. The package engine is `>=22` because the locked Supabase client dependency requires Node 22.
+- **Node.js Version:** 22.x. The application and its locked Supabase dependency are tested on Node 22; the Vercel project and package engine are pinned to this major.
 - **Build Command:** `npm run build`.
-- **Output Directory:** leave the framework default; Vercel serves the repository's `public/` assets and deploys the `api/` functions.
+- **Output Directory:** `vercel.json` pins this to `public/`, so no separate dashboard override is needed.
 
-`vercel.json` maps `/api/*` to `api/index.js` and sets a 30-second function duration. Do not point Vercel at an old Neon/pg-pool build or a nested ZIP folder.
+`vercel.json` pins the static output to `public/`, maps `/api/*` to `api/index.js`, and sets a 30-second function duration. Keep the Vercel Root Directory at the repository root; do not point it at an old Neon/pg-pool build or a nested ZIP folder.
 
 ## 3. Add environment variables
 

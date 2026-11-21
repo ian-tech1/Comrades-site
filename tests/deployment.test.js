@@ -93,6 +93,7 @@ test("deployment configuration targets the canonical API and Node 22 runtime", a
   ]);
   assert.equal(vercel.functions["api/index.js"].maxDuration, 30);
   assert.equal(vercel.buildCommand, "npm run build");
+  assert.equal(vercel.outputDirectory, "public");
   assert.equal(vercel.rewrites[0].destination, "/api/index?__path=:path*");
-  assert.equal(pkg.engines.node, ">=22");
+  assert.equal(pkg.engines.node, "22.x");
 });
