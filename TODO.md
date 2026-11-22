@@ -59,6 +59,6 @@
 
 ## Welcome page and configurable login presentation (2026-11-22)
 
-- [x] **Use the supplied sample on the welcome page.** Show the supplied CDACC examination-portal image when a visitor opens the public portal/sign-in page; store it as a public website asset. The image's pictured login fields are decorative only; keep the current working sign-in controls visible and usable.
+- [x] **Use the supplied sample as a live login composition.** Show the supplied CDACC examination-portal image when a visitor opens the public portal/sign-in page; place the real username/email and password controls in a live form card over the pictured sign-in area. Do not rely on the image's rasterized fields; the live form must remain keyboard- and screen-reader-usable on desktop and mobile.
 - [x] **Keep existing login behavior.** Preserve learner username/email and password sign-in, learner registration, administrator access toggle, session handling, and existing authentication routes. A design change must not alter credentials, roles, or login processing.
 - [x] **Add admin-selectable welcome/login designs.** In admin System Settings, let an administrator choose between the supplied CDACC welcome style, the existing Comreds login design, and a navy/teal alternative. Persist the validated selection globally so it is the style shown to signed-out visitors, and expose no other private settings publicly. Keep the selector usable on mobile and keyboard accessible.

@@ -540,10 +540,38 @@ test("admin-selectable welcome designs preserve existing sign-in behavior and ex
   assert.match(app, /Username or email/);
   assert.match(app, /name="password" type="password"/);
   assert.match(app, /Administrator access/);
-  assert.match(app, /CDACC examination portal welcome sample/);
+  for (const [field, label] of [
+    ["username", "Username"],
+    ["name", "Full name"],
+    ["email", "Email address"],
+    ["phone", "Phone number"],
+    ["identifier", "Username or email"],
+    ["password", "Password"],
+  ]) {
+    assert.match(app, new RegExp(`for="auth-${field}"[^>]*>${label}<`));
+    assert.match(app, new RegExp(`id="auth-${field}" name="${field}"`));
+  }
+  assert.match(
+    app,
+    /class="auth-background-image" src="\/images\/cdacc-exam-portal-welcome\.jpg" alt="" aria-hidden="true"/,
+  );
 
   for (const design of ["cdacc", "classic", "navy"])
     assert.match(css, new RegExp(`\\.auth-theme-${design}`));
+  assert.match(css, /\.auth-theme-cdacc \.auth-background-image/);
+  assert.match(
+    css,
+    /\.auth-theme-cdacc \.auth-card\s*\{[\s\S]*?background: rgba\(255, 255, 255, 0\.82\)/,
+  );
+  assert.match(css, /auth-card \.field label,[\s\S]*?color: #35465d/);
+  assert.match(
+    css,
+    /\.auth-theme-cdacc \.auth-card\s*\{[\s\S]*?z-index: 2;[\s\S]*?grid-column: 2;/,
+  );
+  assert.match(
+    css,
+    /@media \(max-width: 650px\)[\s\S]*?\.auth-theme-cdacc \.auth-card/,
+  );
   assert.match(schema, /login_design text not null default 'cdacc'/);
   assert.match(
     schema,
