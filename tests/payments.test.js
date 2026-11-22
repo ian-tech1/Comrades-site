@@ -484,3 +484,74 @@ test("initial rainbow loading is accessible, honors reduced motion, and dashboar
   assert.match(app, /id="retryDashboard"/);
   assert.match(app, /Could not refresh portal data/);
 });
+
+test("admin-selectable welcome designs preserve existing sign-in behavior and expose only the public preference", async () => {
+  const [api, app, css, schema, migration, image] = await Promise.all([
+    readFile(new URL("api/index.js", root), "utf8"),
+    readFile(new URL("public/app.js", root), "utf8"),
+    readFile(new URL("public/style.css", root), "utf8"),
+    readFile(new URL("supabase/schema.sql", root), "utf8"),
+    readFile(
+      new URL(
+        "supabase/migrations/20261122072000_configurable_login_design.sql",
+        root,
+      ),
+      "utf8",
+    ),
+    readFile(new URL("public/images/cdacc-exam-portal-welcome.jpg", root)),
+  ]);
+  const meStart = api.indexOf('if (method === "GET" && path === "/api/me")'),
+    meEnd = api.indexOf(
+      'if (method === "GET" && path === "/api/dashboard")',
+      meStart,
+    ),
+    settingsStart = api.indexOf(
+      'if (method === "POST" && path === "/api/admin/settings")',
+    ),
+    settingsEnd = api.indexOf(
+      'if (method === "POST" && path === "/api/admin/requests/status")',
+      settingsStart,
+    ),
+    meRoute = api.slice(meStart, meEnd),
+    settingsRoute = api.slice(settingsStart, settingsEnd);
+
+  assert.ok(meStart >= 0 && meEnd > meStart);
+  assert.match(meRoute, /currentUser\(req\)/);
+  assert.match(meRoute, /loginDesign:\s*settings\.login_design \|\| "cdacc"/);
+  assert.doesNotMatch(meRoute, /supportPhone|paperPrice|password|secret/i);
+
+  assert.ok(settingsStart >= 0 && settingsEnd > settingsStart);
+  assert.match(settingsRoute, /requireUser\(req,\s*res,\s*"admin"\)/);
+  assert.match(
+    settingsRoute,
+    /\["cdacc", "classic", "navy"\]\.includes\(loginDesign\)/,
+  );
+  assert.match(settingsRoute, /login_design:\s*loginDesign/);
+
+  assert.match(app, /name="loginDesign"/);
+  assert.match(app, /label for="loginDesign"/);
+  assert.match(app, /select id="loginDesign" name="loginDesign"/);
+  assert.match(app, /state\.loginDesign = x\.loginDesign \|\| "cdacc"/);
+  assert.match(app, /state\.loginDesign = x\.settings\?\.loginDesign/);
+  assert.match(
+    app,
+    /state\.mode === "register" \? "\/api\/register" : "\/api\/login"/,
+  );
+  assert.match(app, /Username or email/);
+  assert.match(app, /name="password" type="password"/);
+  assert.match(app, /Administrator access/);
+  assert.match(app, /CDACC examination portal welcome sample/);
+
+  for (const design of ["cdacc", "classic", "navy"])
+    assert.match(css, new RegExp(`\\.auth-theme-${design}`));
+  assert.match(schema, /login_design text not null default 'cdacc'/);
+  assert.match(
+    schema,
+    /check \(login_design in \('cdacc', 'classic', 'navy'\)\)/,
+  );
+  assert.match(
+    migration,
+    /check \(login_design in \('cdacc', 'classic', 'navy'\)\)/,
+  );
+  assert.deepEqual([...image.subarray(0, 2)], [0xff, 0xd8]);
+});

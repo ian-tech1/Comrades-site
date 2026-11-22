@@ -275,6 +275,7 @@ async function getSettings() {
         env.DEFAULT_REFER_REGISTRATION_PRICE || 0,
       ),
       support_phone: env.DEFAULT_PAYMENT_PHONE || "+254723278526",
+      login_design: "cdacc",
     })
     .select()
     .single();
@@ -774,6 +775,7 @@ async function route(req, res) {
       portal_settings: [
         "currency",
         "id",
+        "login_design",
         "paper_price",
         "portal_name",
         "refer_registration_price",
@@ -995,8 +997,16 @@ async function route(req, res) {
     clearSession(res);
     return json(res, 200, { ok: true });
   }
-  if (method === "GET" && path === "/api/me")
-    return json(res, 200, { user: await currentUser(req) });
+  if (method === "GET" && path === "/api/me") {
+    const [user, settings] = await Promise.all([
+      currentUser(req),
+      getSettings(),
+    ]);
+    return json(res, 200, {
+      user,
+      loginDesign: settings.login_design || "cdacc",
+    });
+  }
   if (method === "GET" && path === "/api/dashboard") {
     const u = await requireUser(req, res);
     if (!u) return;
@@ -1095,6 +1105,7 @@ async function route(req, res) {
         paperPrice: s.paper_price,
         resultsRequestPrice: s.results_request_price,
         referRegistrationPrice: s.refer_registration_price,
+        loginDesign: s.login_design || "cdacc",
         supportPhone: normalizeKenyanPhone(s.support_phone)
           ? `+${normalizeKenyanPhone(s.support_phone)}`
           : "",
@@ -3544,13 +3555,16 @@ async function route(req, res) {
     const b = await bodyJson(req),
       s = await getSettings(),
       rawPhone = String(b.supportPhone ?? s.support_phone ?? "").trim(),
-      phone = rawPhone ? normalizeKenyanPhone(rawPhone) : "";
+      phone = rawPhone ? normalizeKenyanPhone(rawPhone) : "",
+      loginDesign = String(b.loginDesign ?? s.login_design ?? "cdacc");
     if (rawPhone && !/^254[17]\d{8}$/.test(phone || ""))
       return fail(
         res,
         400,
         "Enter a valid Kenyan WhatsApp mobile number (07…/01… or +254…).",
       );
+    if (!["cdacc", "classic", "navy"].includes(loginDesign))
+      return fail(res, 400, "Choose one of the available welcome designs.");
     const prices = {
       paper_price: Number(b.paperPrice ?? s.paper_price),
       results_request_price: Number(
@@ -3578,6 +3592,7 @@ async function route(req, res) {
         currency: "KES",
         ...prices,
         support_phone: phone,
+        login_design: loginDesign,
       })
       .select()
       .single();
