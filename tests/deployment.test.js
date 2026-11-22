@@ -86,6 +86,60 @@ test("status-query responses cannot unlock payments and receipts are unique", as
   );
 });
 
+test("academic results are account-scoped, admin-uploaded, and protected by RLS", async () => {
+  const [api, schema] = await Promise.all([
+    readFile(new URL("api/index.js", root), "utf8"),
+    readFile(new URL("supabase/schema.sql", root), "utf8"),
+  ]);
+  const checkStart = api.indexOf(
+      'if (method === "POST" && path === "/api/results/check")',
+    ),
+    checkEnd = api.indexOf(
+      'if (method === "POST" && path === "/api/admin/results/status")',
+      checkStart,
+    ),
+    checkRoute = api.slice(checkStart, checkEnd),
+    downloadStart = api.indexOf(
+      'if (method === "GET" && path.startsWith("/api/results/download/"))',
+    ),
+    downloadEnd = api.indexOf(
+      'if (method === "GET" && path === "/api/papers")',
+      downloadStart,
+    ),
+    downloadRoute = api.slice(downloadStart, downloadEnd);
+  assert.ok(checkStart >= 0 && checkEnd > checkStart);
+  assert.match(checkRoute, /bodyJson\(req\)/);
+  assert.match(checkRoute, /requireUser\(req, res, "student"\)/);
+  assert.match(checkRoute, /\.eq\("user_id", u\.id\)/);
+  assert.ok(downloadStart >= 0 && downloadEnd > downloadStart);
+  assert.match(downloadRoute, /request\.user_id !== u\.id/);
+  assert.match(
+    downloadRoute,
+    /createSignedUrl\(request\.result_storage_path, 120/,
+  );
+  assert.match(api, /requireUser\(req, res, "admin"\)/);
+  assert.match(api, /pdfHeader !== "%PDF-"/);
+  assert.match(
+    schema,
+    /alter table public\.result_requests enable row level security;/i,
+  );
+  assert.match(schema, /result_requests_deny_direct_client_access/i);
+  assert.match(schema, /result_requests_uploaded_by_idx/i);
+  assert.match(schema, /profiles_username_lower_unique_idx/i);
+});
+
+test("legacy students can set usernames and completed results remain closed in the UI", async () => {
+  const [api, app] = await Promise.all([
+    readFile(new URL("api/index.js", root), "utf8"),
+    readFile(new URL("public/app.js", root), "utf8"),
+  ]);
+  assert.match(api, /usernameInput && !isValidUsername\(username\)/);
+  assert.match(api, /updates\.username = username/);
+  assert.match(api, /That username is already in use\./);
+  assert.match(app, /id="profileForm"/);
+  assert.match(app, /r\.status === "completed" \? "disabled" : ""/);
+});
+
 test("deployment configuration targets the canonical API and Node 22 runtime", async () => {
   const [vercel, pkg] = await Promise.all([
     readFile(new URL("vercel.json", root), "utf8").then(JSON.parse),

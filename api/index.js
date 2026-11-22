@@ -5,6 +5,11 @@ import { db, supabaseUrl } from "./db.js";
 import { resolveRequestPath } from "./request-path.js";
 import { isSameOriginRequest, safeEquals } from "./security.js";
 import { isValidMpesaConfirmation } from "./payment-proof.js";
+import {
+  isValidUsername,
+  normalizeUsername,
+  validateResultsRequest,
+} from "./results.js";
 export const config = { api: { bodyParser: false }, maxDuration: 30 };
 const _clean = (v) =>
     typeof v === "string"
@@ -141,6 +146,7 @@ function session(req) {
 const safeUser = (u) => ({
   id: u.id,
   name: u.name,
+  username: u.username || "",
   email: u.email,
   phone: u.phone || "",
   role: u.role,
@@ -151,7 +157,7 @@ async function currentUser(req) {
   if (!s) return null;
   const { data, error } = await db
     .from("profiles")
-    .select("id,name,email,phone,role,created_at")
+    .select("id,name,username,email,phone,role,created_at")
     .eq("id", s.id)
     .maybeSingle();
   if (error) throw error;
@@ -280,10 +286,25 @@ const mapPaper = (p) => ({
     priority: n.priority || "normal",
     expiresAt: n.expires_at,
     createdAt: n.created_at,
+  }),
+  mapResultRequest = (r) => ({
+    id: r.id,
+    userId: r.user_id,
+    institutionName: r.institution_name,
+    registrationNumber: r.registration_number,
+    admissionNumber: r.admission_number,
+    registeredUnits: Array.isArray(r.registered_units)
+      ? r.registered_units
+      : [],
+    status: r.status,
+    resultFileName: r.status === "completed" ? r.result_file_name || "" : "",
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    uploadedAt: r.uploaded_at || null,
   });
-async function notifyAdmins(title, body) {
+async function notifyAdmins(title, body, type = "payment") {
   const { data } = await db.from("profiles").select("id").eq("role", "admin");
-  for (const a of data || []) await notify(a.id, title, body, "payment");
+  for (const a of data || []) await notify(a.id, title, body, type);
 }
 async function markPaid(pay, receipt, amount) {
   const { data: r } = await db
@@ -569,6 +590,23 @@ async function route(req, res) {
         "password_salt",
         "phone",
         "role",
+        "username",
+      ],
+      result_requests: [
+        "admission_number",
+        "created_at",
+        "id",
+        "institution_name",
+        "registration_number",
+        "registered_units",
+        "result_file_name",
+        "result_file_size",
+        "result_storage_path",
+        "status",
+        "updated_at",
+        "uploaded_at",
+        "uploaded_by",
+        "user_id",
       ],
     };
     const names = Object.keys(REQUIRED),
@@ -606,15 +644,16 @@ async function route(req, res) {
   if (method === "POST" && path === "/api/register") {
     const b = await bodyJson(req),
       name = String(b.name || "").trim(),
+      username = normalizeUsername(b.username),
       email = String(b.email || "")
         .trim()
         .toLowerCase(),
       password = String(b.password || "");
-    if (!name || !email || password.length < 8)
+    if (!name || !email || !isValidUsername(username) || password.length < 8)
       return fail(
         res,
         400,
-        "Name, email and a password of at least 8 characters are required.",
+        "Choose a username (3–32 letters, numbers, dots, dashes or underscores), enter a name and email, and use a password of at least 8 characters.",
       );
     const salt = crypto.randomBytes(16).toString("hex"),
       hash = crypto.scryptSync(password, salt, 64).toString("hex"),
@@ -622,34 +661,35 @@ async function route(req, res) {
         .from("profiles")
         .insert({
           name,
+          username,
           email,
           phone: String(b.phone || ""),
           role: "student",
           password_salt: salt,
           password_hash: hash,
         })
-        .select("id,name,email,phone,role,created_at")
+        .select("id,name,username,email,phone,role,created_at")
         .single();
     if (error)
       return fail(
         res,
         error.code === "23505" ? 409 : 400,
-        error.code === "23505" ? "Email is already registered." : error.message,
+        error.code === "23505"
+          ? "That username or email is already registered."
+          : error.message,
       );
     setSession(res, data);
     return json(res, 201, { user: safeUser(data) });
   }
   if (method === "POST" && path === "/api/login") {
     const b = await bodyJson(req),
-      email = String(b.email || "")
-        .trim()
-        .toLowerCase(),
+      identifier = normalizeUsername(b.identifier || b.username || b.email),
       ipHash = clientIpHash(req),
       since = new Date(Date.now() - 15 * 60 * 1000).toISOString();
     const recentByEmail = await db
         .from("login_events")
         .select("id", { count: "exact", head: true })
-        .eq("email", email)
+        .eq("email", identifier)
         .eq("success", false)
         .gte("created_at", since),
       recentByIp = ipHash
@@ -668,12 +708,21 @@ async function route(req, res) {
         429,
         "Too many sign-in attempts. Try again in 15 minutes.",
       );
-    const { data, error } = await db
+    let { data, error } = await db
       .from("profiles")
       .select("*")
-      .eq("email", email)
+      .eq("username", identifier)
       .maybeSingle();
     if (error) throw error;
+    if (!data) {
+      const legacy = await db
+        .from("profiles")
+        .select("*")
+        .eq("email", identifier)
+        .maybeSingle();
+      if (legacy.error) throw legacy.error;
+      data = legacy.data;
+    }
     const passwordMatches = data
       ? crypto.timingSafeEqual(
           crypto.scryptSync(String(b.password || ""), data.password_salt, 64),
@@ -682,14 +731,14 @@ async function route(req, res) {
       : false;
     const { error: eventError } = await db.from("login_events").insert({
       user_id: data?.id || null,
-      email,
+      email: identifier,
       success: passwordMatches,
       ip_hash: ipHash,
       user_agent: String(req.headers["user-agent"] || "").slice(0, 500),
     });
     if (eventError) throw eventError;
     if (!data || !passwordMatches)
-      return fail(res, 401, "Incorrect email or password.");
+      return fail(res, 401, "Incorrect username or password.");
     setSession(res, data);
     return json(res, 200, { user: safeUser(data) });
   }
@@ -702,7 +751,7 @@ async function route(req, res) {
   if (method === "GET" && path === "/api/dashboard") {
     const u = await requireUser(req, res);
     if (!u) return;
-    const [s, rr, pp, pa, nn, uu, nt, ff] = await Promise.all([
+    const [s, rr, pp, pa, nn, uu, nt, ff, resultRows] = await Promise.all([
       getSettings(),
       db
         .from("paper_requests")
@@ -718,7 +767,7 @@ async function route(req, res) {
       u.role === "admin"
         ? db
             .from("profiles")
-            .select("id,name,email,phone,role,created_at")
+            .select("id,name,username,email,phone,role,created_at")
             .order("created_at", { ascending: false })
         : Promise.resolve({ data: [], error: null }),
       db
@@ -728,8 +777,20 @@ async function route(req, res) {
         .order("created_at", { ascending: false })
         .limit(30),
       db.from("favorites").select("paper_id").eq("user_id", u.id),
+      u.role === "admin"
+        ? db
+            .from("result_requests")
+            .select("*")
+            .order("created_at", { ascending: false })
+            .limit(500)
+        : db
+            .from("result_requests")
+            .select("*")
+            .eq("user_id", u.id)
+            .order("created_at", { ascending: false })
+            .limit(100),
     ]);
-    for (const x of [rr, pp, pa, nn, uu, nt, ff])
+    for (const x of [rr, pp, pa, nn, uu, nt, ff, resultRows])
       if (x.error && x.error.code !== "42P01") throw x.error;
     const requests = (rr.data || []).filter(
         (x) => u.role === "admin" || x.user_id === u.id,
@@ -746,6 +807,7 @@ async function route(req, res) {
       notices: (nn.data || []).map(mapNotice),
       notifications: nt.data || [],
       favorites: (ff.data || []).map((x) => x.paper_id),
+      resultRequests: (resultRows.data || []).map(mapResultRequest),
       settings: {
         portalName: s.portal_name,
         currency: s.currency,
@@ -753,6 +815,259 @@ async function route(req, res) {
         supportPhone: s.support_phone,
       },
     });
+  }
+  if (method === "POST" && path === "/api/results/requests") {
+    const u = await requireUser(req, res, "student");
+    if (!u) return;
+    const since = new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      recent = await db
+        .from("result_requests")
+        .select("id")
+        .eq("user_id", u.id)
+        .gte("created_at", since)
+        .limit(5);
+    if (recent.error) throw recent.error;
+    if ((recent.data || []).length >= 5)
+      return fail(
+        res,
+        429,
+        "Too many results requests. Try again in 10 minutes.",
+      );
+    let details;
+    try {
+      details = validateResultsRequest(await bodyJson(req));
+    } catch (error) {
+      return fail(res, 400, error.message);
+    }
+    const { data, error } = await db
+      .from("result_requests")
+      .insert({
+        user_id: u.id,
+        institution_name: details.institutionName,
+        registration_number: details.registrationNumber,
+        admission_number: details.admissionNumber,
+        registered_units: details.registeredUnits,
+        status: "requested",
+      })
+      .select("*")
+      .single();
+    if (error) throw error;
+    await notifyAdmins(
+      "New results request",
+      `A student submitted an academic results request (reference ${data.id.slice(0, 8)}).`,
+      "results",
+    );
+    return json(res, 201, { resultRequest: mapResultRequest(data) });
+  }
+  if (method === "POST" && path === "/api/results/check") {
+    const u = await requireUser(req, res, "student");
+    if (!u) return;
+    const b = await bodyJson(req),
+      institutionName = String(b.institution || "").trim(),
+      registrationNumber = String(b.registration || "").trim(),
+      admissionNumber = String(b.admission || "").trim();
+    if (!institutionName || !registrationNumber || !admissionNumber)
+      return fail(
+        res,
+        400,
+        "Enter your institution, registration number and admission number.",
+      );
+    const { data, error } = await db
+      .from("result_requests")
+      .select("*")
+      .eq("user_id", u.id)
+      .order("created_at", { ascending: false })
+      .limit(200);
+    if (error) throw error;
+    const key = (value) =>
+        String(value || "")
+          .trim()
+          .replace(/\s+/g, " ")
+          .toLowerCase(),
+      match = (data || []).find(
+        (item) =>
+          key(item.institution_name) === key(institutionName) &&
+          key(item.registration_number) === key(registrationNumber) &&
+          key(item.admission_number) === key(admissionNumber),
+      );
+    return json(res, 200, {
+      resultRequest: match ? mapResultRequest(match) : null,
+    });
+  }
+  if (method === "POST" && path === "/api/admin/results/status") {
+    const u = await requireUser(req, res, "admin");
+    if (!u) return;
+    const b = await bodyJson(req),
+      id = String(b.id || ""),
+      status = String(b.status || "");
+    if (!id || !["requested", "processing", "rejected"].includes(status))
+      return fail(res, 400, "Choose a valid results-request status.");
+    const { data, error } = await db
+      .from("result_requests")
+      .update({ status, updated_at: now() })
+      .eq("id", id)
+      .neq("status", "completed")
+      .select("*")
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return fail(res, 404, "Open results request not found.");
+    return json(res, 200, { resultRequest: mapResultRequest(data) });
+  }
+  if (method === "POST" && path === "/api/admin/results/upload-url") {
+    const u = await requireUser(req, res, "admin");
+    if (!u) return;
+    const b = await bodyJson(req),
+      id = String(b.requestId || ""),
+      fileName = String(b.fileName || "")
+        .replace(/[\\/\r\n]/g, "")
+        .slice(0, 160),
+      size = Number(b.size);
+    if (!id || !/\.pdf$/i.test(fileName))
+      return fail(res, 400, "Choose a PDF results document.");
+    if (!Number.isFinite(size) || size < 1 || size > 25 * 1024 * 1024)
+      return fail(
+        res,
+        400,
+        "The results PDF must be between 1 byte and 25 MB.",
+      );
+    const { data: request, error: requestError } = await db
+      .from("result_requests")
+      .select("id")
+      .eq("id", id)
+      .maybeSingle();
+    if (requestError) throw requestError;
+    if (!request) return fail(res, 404, "Results request not found.");
+    const storagePath = `results/${id}/${crypto.randomUUID()}.pdf`,
+      { data, error } = await supabase.storage
+        .from(BUCKET)
+        .createSignedUploadUrl(storagePath, { upsert: false });
+    if (error) throw error;
+    return json(res, 200, {
+      storagePath,
+      uploadUrl: data.signedUrl || data.signedURL,
+      token: data.token,
+      contentType: "application/pdf",
+      expiresIn: 7200,
+    });
+  }
+  if (method === "POST" && path === "/api/admin/results/complete") {
+    const u = await requireUser(req, res, "admin");
+    if (!u) return;
+    const b = await bodyJson(req),
+      id = String(b.requestId || ""),
+      storagePath = String(b.storagePath || ""),
+      fileName = String(b.fileName || "")
+        .replace(/[\\/\r\n]/g, "")
+        .slice(0, 160),
+      fileSize = Number(b.fileSize),
+      parts = storagePath.split("/");
+    if (
+      !id ||
+      !/\.pdf$/i.test(fileName) ||
+      !Number.isFinite(fileSize) ||
+      fileSize < 1 ||
+      fileSize > 25 * 1024 * 1024 ||
+      parts.length !== 3 ||
+      parts[0] !== "results" ||
+      parts[1] !== id ||
+      !/^[a-f0-9-]{36}\.pdf$/i.test(parts[2])
+    )
+      return fail(
+        res,
+        400,
+        "Upload a valid PDF for this results request first.",
+      );
+    const { data: request, error: requestError } = await db
+      .from("result_requests")
+      .select("id,user_id,result_storage_path")
+      .eq("id", id)
+      .maybeSingle();
+    if (requestError) throw requestError;
+    if (!request) return fail(res, 404, "Results request not found.");
+    const { data: objects, error: listError } = await supabase.storage
+      .from(BUCKET)
+      .list(`results/${id}`, { search: parts[2] });
+    if (listError) throw listError;
+    if (!objects?.some((object) => object.name === parts[2]))
+      return fail(
+        res,
+        400,
+        "Storage did not confirm the uploaded results PDF.",
+      );
+    const { data: storedFile, error: downloadError } = await supabase.storage
+      .from(BUCKET)
+      .download(storagePath);
+    if (downloadError) throw downloadError;
+    const pdfHeader = Buffer.from(
+      await storedFile.slice(0, 5).arrayBuffer(),
+    ).toString("ascii");
+    if (storedFile.size !== fileSize || pdfHeader !== "%PDF-") {
+      await supabase.storage.from(BUCKET).remove([storagePath]);
+      return fail(
+        res,
+        400,
+        "The uploaded file is not a valid PDF of the expected size.",
+      );
+    }
+    const { data, error } = await db
+      .from("result_requests")
+      .update({
+        result_storage_path: storagePath,
+        result_file_name: fileName,
+        result_file_size: fileSize,
+        uploaded_by: u.id,
+        uploaded_at: now(),
+        updated_at: now(),
+        status: "completed",
+      })
+      .eq("id", id)
+      .select("*")
+      .single();
+    if (error) throw error;
+    if (
+      request.result_storage_path &&
+      request.result_storage_path !== storagePath
+    )
+      await supabase.storage.from(BUCKET).remove([request.result_storage_path]);
+    await notify(
+      request.user_id,
+      "Your results are ready",
+      "Your requested results document is ready to view in the portal.",
+      "results",
+    );
+    await db.from("audit_logs").insert({
+      actor_id: u.id,
+      action: "results.upload",
+      entity_type: "result_request",
+      entity_id: id,
+      metadata: { fileSize },
+    });
+    return json(res, 200, { resultRequest: mapResultRequest(data) });
+  }
+  if (method === "GET" && path.startsWith("/api/results/download/")) {
+    const u = await requireUser(req, res),
+      id = path.split("/").pop();
+    if (!u) return;
+    const { data: request, error } = await db
+      .from("result_requests")
+      .select("id,user_id,status,result_storage_path,result_file_name")
+      .eq("id", id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!request || (u.role !== "admin" && request.user_id !== u.id))
+      return fail(res, 404, "Results document not found.");
+    if (request.status !== "completed" || !request.result_storage_path)
+      return fail(res, 404, "Results document is not available yet.");
+    const { data: link, error: linkError } = await supabase.storage
+      .from(BUCKET)
+      .createSignedUrl(request.result_storage_path, 120, {
+        download: request.result_file_name || "results.pdf",
+      });
+    if (linkError) throw linkError;
+    res.statusCode = 302;
+    res.setHeader("cache-control", "no-store");
+    res.setHeader("location", link.signedUrl);
+    return res.end();
   }
   if (method === "GET" && path === "/api/papers") {
     const u = new URL(req.url, "https://vercel.local"),
@@ -1494,15 +1809,27 @@ async function route(req, res) {
       name = String(b.name || u.name)
         .trim()
         .slice(0, 100),
-      phone = String(b.phone || "").replace(/\s/g, "");
+      phone = String(b.phone || "").replace(/\s/g, ""),
+      usernameInput = String(b.username || "").trim(),
+      username = usernameInput ? normalizeUsername(usernameInput) : "";
+    if (usernameInput && !isValidUsername(username))
+      return fail(
+        res,
+        400,
+        "Choose a username (3–32 letters, numbers, dots, dashes or underscores).",
+      );
     if (phone && !/^\+?254\d{9}$/.test(phone) && !/^07\d{8}$/.test(phone))
       return fail(res, 400, "Enter a valid Kenyan phone number.");
+    const updates = { name, phone };
+    if (username) updates.username = username;
     const { data, error } = await db
       .from("profiles")
-      .update({ name, phone })
+      .update(updates)
       .eq("id", u.id)
-      .select("id,name,email,phone,role,created_at")
+      .select("id,name,username,email,phone,role,created_at")
       .single();
+    if (error?.code === "23505")
+      return fail(res, 409, "That username is already in use.");
     if (error) throw error;
     return json(res, 200, { user: safeUser(data) });
   }

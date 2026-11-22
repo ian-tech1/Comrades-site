@@ -75,7 +75,7 @@ function status(s) {
 function authView() {
   const admin = state.mode === "admin";
   $("#app").innerHTML =
-    `<div class="auth"><section class="auth-intro"><div class="brand"><span class="brand-icon">🎓</span><div><strong>Comreds Papers Portal</strong><small>Learn · Prepare · Succeed</small></div></div><h1>Your revision journey starts here.</h1><p>Request, pay for and access learning materials from one secure student portal.</p></section><section class="auth-card"><h2>${state.mode === "register" ? "Create learner account" : admin ? "Administrator sign in" : "Welcome back"}</h2><p class="muted">${state.mode === "register" ? "Join Comreds to access revision papers." : "Sign in to continue to your dashboard."}</p><form id="authForm">${state.mode === "register" ? `<div class="field"><label>Full name</label><input name="name" required></div><div class="field"><label>Phone number</label><input name="phone" placeholder="07XXXXXXXX"></div>` : ""}<div class="field"><label>Email address</label><input name="email" type="email" required></div><div class="field"><label>Password</label><input name="password" type="password" minlength="8" required></div><button class="btn" style="width:100%">${state.mode === "register" ? "Create account" : "Sign in"}</button></form><p style="margin-top:18px">${!admin && state.mode !== "register" ? `New learner? <button class="link" id="register">Create account</button>` : ""}${state.mode === "register" ? `Already registered? <button class="link" id="login">Sign in</button>` : ""}</p><button class="link" id="adminLogin">Administrator access</button></section></div>`;
+    `<div class="auth"><section class="auth-intro"><div class="brand"><span class="brand-icon">🎓</span><div><strong>Comreds Papers Portal</strong><small>Learn · Prepare · Succeed</small></div></div><h1>Your revision journey starts here.</h1><p>Request, pay for and access learning materials from one secure student portal.</p></section><section class="auth-card"><h2>${state.mode === "register" ? "Create learner account" : admin ? "Administrator sign in" : "Welcome back"}</h2><p class="muted">${state.mode === "register" ? "Choose a username to sign in and add your contact details." : "Sign in with your username and password."}</p><form id="authForm">${state.mode === "register" ? `<div class="field"><label>Username</label><input name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,31}" autocomplete="username" placeholder="e.g. learner_01"></div><div class="field"><label>Full name</label><input name="name" required></div><div class="field"><label>Email address</label><input name="email" type="email" required autocomplete="email"></div><div class="field"><label>Phone number</label><input name="phone" placeholder="07XXXXXXXX"></div>` : `<div class="field"><label>Username or email</label><input name="identifier" required autocomplete="username" placeholder="Your username"></div>`}<div class="field"><label>Password</label><input name="password" type="password" minlength="8" required autocomplete="${state.mode === "register" ? "new-password" : "current-password"}"></div><button class="btn" style="width:100%">${state.mode === "register" ? "Create account" : "Sign in"}</button></form><p style="margin-top:18px">${!admin && state.mode !== "register" ? `New learner? <button class="link" id="register">Create account</button>` : ""}${state.mode === "register" ? `Already registered? <button class="link" id="login">Sign in</button>` : ""}</p><button class="link" id="adminLogin">Administrator access</button></section></div>`;
   $("#authForm").onsubmit = async (e) => {
     e.preventDefault();
     const b = Object.fromEntries(new FormData(e.target));
@@ -125,6 +125,7 @@ function render() {
         "Manage Papers",
         "Manage Members",
         "Requests & Orders",
+        "Results Requests",
         "Transactions",
         "Payment Reports",
         "Emergency Papers",
@@ -133,6 +134,8 @@ function render() {
       ]
     : [
         "Dashboard",
+        "Request Results",
+        "Check Results",
         "Request Papers",
         "My Papers",
         "Payments",
@@ -146,7 +149,7 @@ function render() {
     pays = d.payments || [],
     papers = d.papers || [];
   $("#app").innerHTML =
-    `<div class="shell"><aside class="side" id="side"><div class="brand"><span class="brand-icon">🎓</span><div><strong>Comreds Papers Portal</strong><small>${admin ? "Admin Panel" : "Learn · Prepare · Succeed"}</small></div></div><nav class="nav">${nav.map((n) => `<button class="${state.tab === n ? "active" : ""}" data-tab="${n}">${{ Dashboard: "⌂", "Manage Papers": "▤", "Manage Members": "♙", "Requests & Orders": "▣", Transactions: "▧", "Payment Reports": "▥", "Emergency Papers": "⚠", "System Settings": "⚙", "Request Papers": "▤", "My Papers": "▣", Payments: "▣", "Transaction History": "▤", "My Profile": "♙" }[n] || "•"} &nbsp; ${n}</button>`).join("")}</nav><div class="side-foot">“Small steps everyday lead to big results.”<br><br><button class="link" id="logout" style="color:white">↪ Log out</button></div></aside><main class="main"><header class="top"><button class="mobile-menu" id="menu">☰</button><input class="search" id="search" placeholder="⌕  Search for papers (e.g. Mathematics, Automotive...)"/><div class="top-tools"><button class="icon-btn" title="Notifications">♢<span class="notification-count">${(d.notifications || []).filter((n) => !n.read_at).length || ""}</span></button></div><div class="user"><div class="avatar">${esc(u.name[0]?.toUpperCase() || "C")}</div><div><b>${esc(u.name)}</b><br><small class="muted">${admin ? "Administrator" : "Student"}</small></div></div></header><section class="content" id="content">${pageContent(d, admin)}</section></main></div>`;
+    `<div class="shell"><aside class="side" id="side"><div class="brand"><span class="brand-icon">🎓</span><div><strong>Comreds Papers Portal</strong><small>${admin ? "Admin Panel" : "Learn · Prepare · Succeed"}</small></div></div><nav class="nav">${nav.map((n) => `<button class="${state.tab === n ? "active" : ""}" data-tab="${n}">${{ Dashboard: "⌂", "Manage Papers": "▤", "Manage Members": "♙", "Requests & Orders": "▣", "Results Requests": "▧", "Request Results": "▤", "Check Results": "✓", Transactions: "▧", "Payment Reports": "▥", "Emergency Papers": "⚠", "System Settings": "⚙", "Request Papers": "▤", "My Papers": "▣", Payments: "▣", "Transaction History": "▤", "My Profile": "♙" }[n] || "•"} &nbsp; ${n}</button>`).join("")}</nav><div class="side-foot">“Small steps everyday lead to big results.”<br><br><button class="link" id="logout" style="color:white">↪ Log out</button></div></aside><main class="main"><header class="top"><button class="mobile-menu" id="menu">☰</button><input class="search" id="search" placeholder="⌕  Search for papers (e.g. Mathematics, Automotive...)"/><div class="top-tools"><button class="icon-btn" title="Notifications">♢<span class="notification-count">${(d.notifications || []).filter((n) => !n.read_at).length || ""}</span></button></div><div class="user"><div class="avatar">${esc(u.name[0]?.toUpperCase() || "C")}</div><div><b>${esc(u.name)}</b><br><small class="muted">${admin ? "Administrator" : "Student"}</small></div></div></header><section class="content" id="content">${pageContent(d, admin)}</section></main></div>`;
   document.querySelectorAll("[data-tab]").forEach(
     (b) =>
       (b.onclick = () => {
@@ -177,11 +180,26 @@ function pageContent(d, admin) {
     pays = d.payments || [],
     users = d.users || [],
     notices = d.notices || [],
+    resultRequests = d.resultRequests || [],
     paid = countSafe(req, (x) => x.status === "paid"),
     pending = countSafe(req, (x) =>
       ["requested", "awaiting_payment", "processing"].includes(x.status),
     );
   const title = state.tab;
+  if (title === "Request Results")
+    return `<div class="welcome"><div><h1>Request Academic Results</h1><p class="muted">Send your institution and student details to the admin for processing.</p></div></div><div class="panel"><h2>Submit a results request</h2><p class="muted">Enter your institution, registration number, admission number and the units you registered. Your request is visible only to you and the portal admin.</p><form id="resultRequestForm" class="form-grid"><div class="field"><label>Institution name</label><input name="institutionName" maxlength="160" required placeholder="College or university"></div><div class="field"><label>Registration number</label><input name="registrationNumber" maxlength="80" required></div><div class="field"><label>Admission number</label><input name="admissionNumber" maxlength="80" required></div><div class="field full"><label>Registered units (one per line)</label><textarea name="registeredUnits" rows="5" maxlength="5000" required placeholder="MAT 101 — Calculus&#10;CSC 102 — Programming"></textarea></div><div class="full"><button class="btn">Submit results request</button></div></form></div><div class="panel"><h2>Your requests</h2><div class="table-wrap"><table><tr><th>Institution</th><th>Registration</th><th>Admission</th><th>Units</th><th>Status</th><th>Submitted</th></tr>${resultRequests.map((r) => `<tr><td>${esc(r.institutionName)}</td><td>${esc(r.registrationNumber)}</td><td>${esc(r.admissionNumber)}</td><td>${r.registeredUnits.map(esc).join(", ")}</td><td>${status(r.status)}</td><td>${new Date(r.createdAt).toLocaleDateString()}</td></tr>`).join("") || '<tr><td colspan="6" class="muted">You have not requested results yet.</td></tr>'}</table></div></div>`;
+  if (title === "Check Results")
+    return `<div class="welcome"><div><h1>Check Your Results</h1><p class="muted">Use the same institution, registration number and admission number you submitted with your request.</p></div></div><div class="panel"><form id="resultLookupForm" class="form-grid"><div class="field"><label>Institution name</label><input name="institution" required></div><div class="field"><label>Registration number</label><input name="registration" required></div><div class="field"><label>Admission number</label><input name="admission" required></div><div class="full"><button class="btn">Check results</button></div></form><div id="resultsLookup" aria-live="polite"></div></div><div class="panel"><h2>Your submitted results requests</h2><div class="table-wrap"><table><tr><th>Institution</th><th>Registration</th><th>Status</th><th>Updated</th><th>Results</th></tr>${resultRequests.map((r) => `<tr><td>${esc(r.institutionName)}</td><td>${esc(r.registrationNumber)}</td><td>${status(r.status)}</td><td>${new Date(r.updatedAt || r.createdAt).toLocaleDateString()}</td><td>${r.status === "completed" ? `<a class="btn" href="/api/results/download/${encodeURIComponent(r.id)}">Download PDF</a>` : "Not ready"}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No results requests found.</td></tr>'}</table></div></div>`;
+  if (title === "Results Requests" && admin)
+    return `<div class="welcome"><div><h1>Academic Results Requests</h1><p class="muted">Review student details, update progress and upload each private PDF result.</p></div></div>${
+      resultRequests
+        .map((r) => {
+          const student = users.find((x) => x.id === r.userId) || {};
+          return `<div class="panel result-request"><div class="panel-head"><h2>Request ${esc(r.id.slice(0, 8))}</h2>${status(r.status)}</div><p><b>Student:</b> ${esc(student.name || "Learner")} · ${esc(student.username || "")} · ${esc(student.email || "")}</p><p><b>Institution:</b> ${esc(r.institutionName)}</p><p><b>Registration number:</b> ${esc(r.registrationNumber)} &nbsp; <b>Admission number:</b> ${esc(r.admissionNumber)}</p><p><b>Registered units:</b> ${r.registeredUnits.map(esc).join(", ")}</p><p class="muted">Submitted ${new Date(r.createdAt).toLocaleString()}${r.resultFileName ? ` · Current file: ${esc(r.resultFileName)}` : ""}</p><div class="form-grid"><div class="field"><label>Request status</label><select data-result-status="${esc(r.id)}" ${r.status === "completed" ? "disabled" : ""}><option value="requested" ${r.status === "requested" ? "selected" : ""}>Requested</option><option value="processing" ${r.status === "processing" ? "selected" : ""}>Processing</option><option value="rejected" ${r.status === "rejected" ? "selected" : ""}>Rejected</option>${r.status === "completed" ? '<option value="completed" selected>Completed</option>' : ""}</select></div><form class="field result-upload-form" data-result-upload="${esc(r.id)}"><label>${r.resultFileName ? "Replace results PDF" : "Upload results PDF"}</label><input type="file" name="file" accept="application/pdf,.pdf" required><button class="btn" type="submit">${r.resultFileName ? "Replace PDF" : "Upload PDF and notify student"}</button></form></div></div>`;
+        })
+        .join("") ||
+      '<div class="panel muted">There are no academic results requests yet.</div>'
+    }`;
   if (title === "Manage Papers" || title === "Request Papers")
     return `<div class="welcome"><div><h1>${admin ? "Manage Papers" : "Request Revision Papers"}</h1><p class="muted">${admin ? "Upload, organize and publish learning materials." : "Browse available materials or submit a paper request."}</p></div></div>${!admin && title === "Request Papers" ? `<div class="panel request-panel"><h2>Can’t find your paper?</h2><p class="muted">Submit a request and we’ll notify you when matching material is published.</p><form id="requestForm" class="form-grid"><div class="field"><label>Paper title</label><input name="title" required placeholder="e.g. KCSE Mathematics 2023"></div><div class="field"><label>Subject</label><input name="subject" required placeholder="Mathematics"></div><div class="field"><label>Level / year</label><input name="level" placeholder="Form 4 / 2023"></div><div class="full"><button class="btn">Submit paper request</button></div></form></div>` : ""}${admin ? `<div class="panel"><h2>Upload a new paper</h2><form id="uploadForm" class="form-grid"><div class="field"><label>Paper title</label><input name="title" required></div><div class="field"><label>Subject</label><input name="subject" required placeholder="Mathematics, English..."></div><div class="field"><label>Paper type</label><select name="type"><option>Revision Paper</option><option>Past Paper</option><option>Marking Scheme</option><option>Notes</option></select></div><div class="field"><label>Price (KES)</label><input name="price" type="number" min="0" value="${d.settings.paperPrice}" required></div><div class="field"><label>Document (PDF, Word, Excel, PowerPoint, CSV, TXT, ODT/ODS/ODP, RTF)</label><input name="file" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt,.rtf,.odt,.ods,.odp" required></div><div class="field"><label>Description</label><input name="description"></div><div class="full"><button class="btn">Upload paper</button></div></form></div>` : ""}<div class="panel"><h2>Available papers</h2>${filterBar(papers)}<div class="paper-grid">${
       applyFilter(papers.filter((x) => admin || x.available))
@@ -189,7 +207,7 @@ function pageContent(d, admin) {
         .join("") || '<p class="muted">No papers published yet.</p>'
     }</div></div>`;
   if (title === "Manage Members")
-    return `<div class="welcome"><div><h1>Manage Members</h1><p class="muted">Registered learners and their accounts.</p></div></div><div class="panel"><div class="table-wrap"><table><tr><th>Name</th><th>Email</th><th>Phone</th><th>Role</th><th>Joined</th></tr>${users.map((x) => `<tr><td>${esc(x.name)}</td><td>${esc(x.email)}</td><td>${esc(x.phone)}</td><td>${esc(x.role)}</td><td>${new Date(x.createdAt).toLocaleDateString()}</td></tr>`).join("")}</table></div></div>`;
+    return `<div class="welcome"><div><h1>Manage Members</h1><p class="muted">Registered learners and their accounts.</p></div></div><div class="panel"><div class="table-wrap"><table><tr><th>Name</th><th>Username</th><th>Email</th><th>Phone</th><th>Role</th><th>Joined</th></tr>${users.map((x) => `<tr><td>${esc(x.name)}</td><td>${esc(x.username || "—")}</td><td>${esc(x.email)}</td><td>${esc(x.phone)}</td><td>${esc(x.role)}</td><td>${new Date(x.createdAt).toLocaleDateString()}</td></tr>`).join("")}</table></div></div>`;
   if (title === "System Settings")
     return `<div class="welcome"><div><h1>System Settings</h1><p class="muted">Configure portal details and default paper pricing.</p></div></div><div class="panel"><form id="settingsForm"><div class="field"><label>Portal name</label><input name="portalName" value="${esc(d.settings.portalName)}"></div><div class="field"><label>Default paper price (KES)</label><input name="paperPrice" type="number" min="0" value="${d.settings.paperPrice}"></div><div class="field"><label>M-Pesa checkout default phone</label><input name="supportPhone" type="tel" placeholder="+2547XXXXXXXX" value="${esc(d.settings.supportPhone)}"></div><button class="btn">Save settings</button></form><p class="muted">This number is used as the default STK checkout phone when a learner has no saved phone. Learners can still enter a different number. Daraja API credentials are configured privately on the server using environment variables, not on this screen.</p></div>`;
   if (title === "Emergency Papers")
@@ -252,7 +270,7 @@ function pageContent(d, admin) {
   if (title === "Security")
     return `<div class="welcome"><div><h1>Account security</h1><p class="muted">Rotate your password; your current session will be signed out afterward.</p></div></div><div class="panel"><form id="passwordForm" class="form-grid"><div class="field"><label>Current password</label><input name="currentPassword" type="password" autocomplete="current-password" required></div><div class="field"><label>New password (12 characters minimum)</label><input name="newPassword" type="password" minlength="12" autocomplete="new-password" required></div><div class="full"><button class="btn">Change password</button></div></form></div>`;
   if (title === "My Profile")
-    return `<div class="welcome"><div><h1>My Profile</h1><p class="muted">Your learner account information.</p></div></div><div class="panel"><p><b>Name:</b> ${esc(d.user.name)}</p><p><b>Email:</b> ${esc(d.user.email)}</p><p><b>Phone:</b> ${esc(d.user.phone || "Not provided")}</p><p><b>Account:</b> Student</p></div>`;
+    return `<div class="welcome"><div><h1>My Profile</h1><p class="muted">Your learner account information.</p></div></div><div class="panel"><form id="profileForm" class="form-grid"><div class="field"><label>Full name</label><input name="name" maxlength="100" required value="${esc(d.user.name)}"></div><div class="field"><label>Username</label><input name="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,31}" autocomplete="username" value="${esc(d.user.username || "")}" placeholder="Set a username for future sign-ins"></div><div class="field"><label>Email</label><input value="${esc(d.user.email)}" disabled></div><div class="field"><label>Phone</label><input name="phone" value="${esc(d.user.phone || "")}" placeholder="07XXXXXXXX"></div><div class="full"><button class="btn">Save profile</button></div></form><p class="muted">You can keep using your email or sign in with your username. Leave username blank to keep your current username.</p></div>`;
   return `<div class="welcome"><div><h1>${admin ? "Admin Dashboard" : `Welcome, ${esc(d.user.name)} 👋`}</h1><p class="muted">${admin ? "Monitor portal activity, papers and payments." : "Access your revision papers, track your payments and stay updated."}</p></div></div><div class="stats"><div class="stat blue"><div class="stat-icon">${admin ? "♙" : "▤"}</div><span>${admin ? "Total Students" : "Total Requests"}</span><b>${admin ? users.filter((x) => x.role === "student").length : req.length}</b><small>${admin ? "Registered learners" : "This month"}</small></div><div class="stat green"><div class="stat-icon">✓</div><span>${admin ? "Total Papers" : "Papers Downloaded"}</span><b>${admin ? papers.length : paid}</b><small>${admin ? "Uploaded materials" : "This month"}</small></div><div class="stat orange"><div class="stat-icon">▣</div><span>${admin ? "Total Revenue" : "Total Spent"}</span><b>KSh ${admin ? pays.filter((x) => x.status === "success").reduce((a, x) => a + x.amount, 0) : pays.filter((x) => x.status === "success").reduce((a, x) => a + x.amount, 0)}</b><small>This month</small></div><div class="stat purple"><div class="stat-icon">◷</div><span>Pending Requests</span><b>${pending}</b><small>${admin ? "Awaiting action" : "Awaiting availability"}</small></div></div>${admin ? `<div class="insight-grid"><div class="panel chart-panel"><div class="panel-head"><h2>Transactions Overview</h2><span class="muted">This month⌄</span></div><div class="chart-bars">${[35, 52, 43, 68, 57, 74, 63, 82, 66, 88, 76, 94].map((v, i) => `<i style="height:${v}%" title="Week ${i + 1}"></i>`).join("")}</div><div class="chart-legend"><span><b class="dot success"></b>Successful</span><span><b class="dot failed"></b>Failed</span></div></div><div class="panel status-panel"><div class="panel-head"><h2>Request Status</h2><span class="donut">${req.length}</span></div><div class="status-row"><span class="dot success"></span>Delivered <b>${countSafe(req, (x) => x.status === "delivered")}</b></div><div class="status-row"><span class="dot pending"></span>Pending <b>${pending}</b></div><div class="status-row"><span class="dot processing"></span>Processing <b>${countSafe(req, (x) => x.status === "processing")}</b></div></div></div>` : ""}<div class="layout"><div><div class="panel"><div class="panel-head"><h2>${admin ? "Recent Paper Requests" : "Recent Paper Requests"}</h2><button class="link" data-goto="${admin ? "Requests & Orders" : "Request Papers"}">View all →</button></div><div class="table-wrap"><table><tr><th>Paper</th>${admin ? "<th>Student</th>" : ""}<th>Status</th><th>Date</th></tr>${
     req
       .slice(0, 6)
@@ -268,7 +286,7 @@ function pageContent(d, admin) {
       .slice(0, 4)
       .map((p) => paperCard(p, admin))
       .join("") || '<p class="muted">No papers available yet.</p>'
-  }</div></div></div><aside><div class="panel"><h2>Quick Actions</h2><div class="quick">${admin ? '<button data-goto="Manage Papers">＋ Upload Papers</button><button class="qgreen" data-goto="Manage Members">♙ Manage Members</button><button class="qpurple" data-goto="Transactions">▣ View Transactions</button><button class="qorange" data-goto="Emergency Papers">⚠ Emergency Papers</button>' : '<button data-goto="Request Papers">▤ Request Papers</button><button class="qgreen" data-goto="Payments">▣ Make Payment (M-Pesa)</button><button class="qorange" data-goto="Emergency Papers">⚠ Emergency Papers</button><button class="qpurple" data-goto="My Papers">☁ View My Papers</button>'}</div></div><div class="panel"><h2>Latest Notices</h2>${
+  }</div></div></div><aside><div class="panel"><h2>Quick Actions</h2><div class="quick">${admin ? '<button data-goto="Manage Papers">＋ Upload Papers</button><button class="qgreen" data-goto="Results Requests">▧ Results Requests</button><button class="qgreen" data-goto="Manage Members">♙ Manage Members</button><button class="qpurple" data-goto="Transactions">▣ View Transactions</button><button class="qorange" data-goto="Emergency Papers">⚠ Emergency Papers</button>' : '<button data-goto="Request Results">▧ Request Results</button><button data-goto="Check Results">✓ Check Results</button><button data-goto="Request Papers">▤ Request Papers</button><button class="qgreen" data-goto="Payments">▣ Make Payment (M-Pesa)</button><button class="qorange" data-goto="Emergency Papers">⚠ Emergency Papers</button><button class="qpurple" data-goto="My Papers">☁ View My Papers</button>'}</div></div><div class="panel"><h2>Latest Notices</h2>${
     notices
       .slice(0, 4)
       .map(
@@ -651,6 +669,19 @@ function wire(admin) {
       toast(x.message);
     }
   });
+  $("#profileForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      await api("/api/profile", {
+        method: "POST",
+        body: JSON.stringify(Object.fromEntries(new FormData(e.target))),
+      });
+      toast("Profile updated.");
+      await load();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
   $("#passwordForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     try {
@@ -679,6 +710,102 @@ function wire(admin) {
     } catch (x) {
       toast(x.message);
     }
+  });
+  $("#resultRequestForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const response = await api("/api/results/requests", {
+        method: "POST",
+        body: JSON.stringify(Object.fromEntries(new FormData(e.target))),
+      });
+      toast(
+        `Results request submitted. Reference: ${response.resultRequest.id.slice(0, 8)}.`,
+      );
+      await load();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $("#resultLookupForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const target = $("#resultsLookup"),
+      values = Object.fromEntries(new FormData(e.target));
+    try {
+      const response = await api("/api/results/check", {
+          method: "POST",
+          body: JSON.stringify(values),
+        }),
+        request = response.resultRequest;
+      target.innerHTML = request
+        ? `<div class="notice"><b>${request.status === "completed" ? "Results are ready" : "Request status"}</b><p>${status(request.status)} · ${esc(request.institutionName)} · ${esc(request.registrationNumber)}</p>${request.status === "completed" ? `<a class="btn" href="/api/results/download/${encodeURIComponent(request.id)}">Download your results PDF</a>` : '<p class="muted">The admin has not uploaded the results document yet.</p>'}</div>`
+        : '<p class="notice">No request matched those details in your account. Check the information or submit a results request first.</p>';
+    } catch (error) {
+      target.textContent = error.message;
+    }
+  });
+  document.querySelectorAll("[data-result-status]").forEach((select) => {
+    select.onchange = async () => {
+      if (select.value === "completed") return;
+      try {
+        await api("/api/admin/results/status", {
+          method: "POST",
+          body: JSON.stringify({
+            id: select.dataset.resultStatus,
+            status: select.value,
+          }),
+        });
+        toast("Results request status updated.");
+        await load();
+      } catch (error) {
+        toast(error.message);
+      }
+    };
+  });
+  document.querySelectorAll("[data-result-upload]").forEach((form) => {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const file = new FormData(form).get("file"),
+        requestId = form.dataset.resultUpload;
+      if (!file || !file.size || !/\.pdf$/i.test(file.name)) {
+        toast("Choose a PDF results file.");
+        return;
+      }
+      if (file.size > 25 * 1024 * 1024) {
+        toast("The results PDF must be 25 MB or smaller.");
+        return;
+      }
+      try {
+        toast("Uploading results PDF…");
+        const upload = await api("/api/admin/results/upload-url", {
+          method: "POST",
+          body: JSON.stringify({
+            requestId,
+            fileName: file.name,
+            size: file.size,
+          }),
+        });
+        const stored = await fetch(upload.uploadUrl, {
+          method: "PUT",
+          headers: { "x-upsert": "false", "content-type": "application/pdf" },
+          body: file,
+        });
+        if (!stored.ok)
+          throw Error("Private storage upload failed. Please retry.");
+        await api("/api/admin/results/complete", {
+          method: "POST",
+          body: JSON.stringify({
+            requestId,
+            storagePath: upload.storagePath,
+            fileName: file.name,
+            fileSize: file.size,
+          }),
+        });
+        toast("Results uploaded and the student has been notified.");
+        await load();
+      } catch (error) {
+        toast(error.message);
+      }
+    });
   });
   $("#noticeForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();

@@ -3,7 +3,7 @@
 ## 1. Prepare Supabase
 
 1. Open the Supabase project that will back this deployment.
-2. In **SQL Editor**, run the complete `supabase/schema.sql` from this repository. Do not run only selected sections; the API readiness check requires the tables and columns in the full schema, including `login_events`.
+2. In **SQL Editor**, run the complete `supabase/schema.sql` from this repository. Do not run only selected sections; the API readiness check requires the tables and columns in the full schema, including `login_events`. The latest schema also adds usernames and the private academic-results request workflow; rerunning it is safe for those additive objects.
 
 Before applying this migration to an existing portal, check for duplicate receipt codes:
 
@@ -65,6 +65,12 @@ The complete placeholder template is `.env.example`. Do not configure `DATABASE_
 3. Sign in to the initial admin account, then use **Security** to change its password (new passwords must be at least 12 characters).
 4. Register a learner and smoke-test: sign-in, browse/request, small and large document upload, private download authorization, manual admin payment confirmation, and CSV export.
 5. With Daraja in sandbox, test an STK prompt using a phone you control, callback confirmation, receipt display, and protected download. Do not switch to live credentials until these steps pass.
+
+## Academic results workflow
+
+Students register with a username and can continue using their existing email credentials; sign-in accepts either the username or email. Existing students can set a username from **My Profile** without recreating their account. A student submits the institution name, registration number, admission number, and registered units in **Request Results**. The student can view only their own requests in **Check Results**. Admins review each request under **Results Requests**, move it through requested/processing/rejected, and upload a PDF to mark the request complete. Completed requests cannot be moved back to an open status, but their PDF can be replaced. The portal notifies the student in-app when results are uploaded.
+
+Results PDFs are stored in the private `papers` bucket. RLS and a restrictive policy deny direct `anon`/`authenticated` table access; the server uses its private service key only after verifying the session and request owner/admin role. The download endpoint then returns a short-lived signed download URL. Do not make the bucket public or expose result storage paths in the client. After applying the schema, smoke-test that one student cannot see or download another student's result.
 
 ## Upload size and Vercel function limits
 

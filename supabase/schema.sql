@@ -287,3 +287,43 @@ create index if not exists subscriptions_user_idx on public.user_subscriptions(u
 create index if not exists webhook_delivery_status_idx on public.webhook_deliveries(status,created_at);
 create index if not exists consent_user_idx on public.consent_records(user_id,consent_type,recorded_at desc);
 notify pgrst, 'reload schema';
+
+
+-- v16.3 student usernames and private academic results workflow
+alter table public.profiles add column if not exists username text;
+create unique index if not exists profiles_username_lower_unique_idx
+  on public.profiles (lower(username))
+  where username is not null and btrim(username) <> '';
+
+create table if not exists public.result_requests (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  institution_name text not null,
+  registration_number text not null,
+  admission_number text not null,
+  registered_units text[] not null default '{}',
+  status text not null default 'requested'
+    check (status in ('requested', 'processing', 'completed', 'rejected')),
+  result_storage_path text,
+  result_file_name text,
+  result_file_size bigint,
+  uploaded_by uuid references public.profiles(id) on delete set null,
+  uploaded_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+alter table public.result_requests enable row level security;
+create index if not exists result_requests_user_created_idx
+  on public.result_requests(user_id, created_at desc);
+create index if not exists result_requests_status_created_idx
+  on public.result_requests(status, created_at desc);
+create index if not exists result_requests_uploaded_by_idx
+  on public.result_requests(uploaded_by);
+drop policy if exists result_requests_deny_direct_client_access
+  on public.result_requests;
+create policy result_requests_deny_direct_client_access
+  on public.result_requests as restrictive
+  for all to anon, authenticated
+  using (false)
+  with check (false);
+notify pgrst, 'reload schema';
