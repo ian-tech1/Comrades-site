@@ -1095,7 +1095,9 @@ async function route(req, res) {
         paperPrice: s.paper_price,
         resultsRequestPrice: s.results_request_price,
         referRegistrationPrice: s.refer_registration_price,
-        supportPhone: s.support_phone,
+        supportPhone: normalizeKenyanPhone(s.support_phone)
+          ? `+${normalizeKenyanPhone(s.support_phone)}`
+          : "",
       },
     });
   }
@@ -2088,7 +2090,8 @@ async function route(req, res) {
         paidAt: paidAt ? formatMpesaTransactionDate(paidAt) : "Not supplied",
         paidAtSource:
           sourceLabels[payment.paid_at_source] || sourceLabels.unknown,
-        studentName: profileResult.data?.name || request.student_name,
+        studentName: profileResult.data?.name,
+        requestStudentName: request.student_name,
         username: profileResult.data?.username,
         email: profileResult.data?.email,
         registeredPhone: profileResult.data?.phone,
@@ -3540,12 +3543,14 @@ async function route(req, res) {
     if (!u) return;
     const b = await bodyJson(req),
       s = await getSettings(),
-      phone = String(b.supportPhone || s.support_phone || "").replace(
-        /\s/g,
-        "",
+      rawPhone = String(b.supportPhone ?? s.support_phone ?? "").trim(),
+      phone = rawPhone ? normalizeKenyanPhone(rawPhone) : "";
+    if (rawPhone && !/^254[17]\d{8}$/.test(phone || ""))
+      return fail(
+        res,
+        400,
+        "Enter a valid Kenyan WhatsApp mobile number (07…/01… or +254…).",
       );
-    if (phone && !/^\+?254\d{9}$/.test(phone) && !/^07\d{8}$/.test(phone))
-      return fail(res, 400, "Enter a valid Kenyan M-Pesa number.");
     const prices = {
       paper_price: Number(b.paperPrice ?? s.paper_price),
       results_request_price: Number(

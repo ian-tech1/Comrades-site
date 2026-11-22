@@ -42,6 +42,7 @@ test("Daraja request timestamps use Africa/Nairobi local time", async () => {
 
 test("Kenyan payer phone normalization accepts local and international forms only", () => {
   assert.equal(normalizeKenyanPhone("0712 345 678"), "254712345678");
+  assert.equal(normalizeKenyanPhone("0112 345 678"), "254112345678");
   assert.equal(normalizeKenyanPhone("+254 712 345 678"), "254712345678");
   assert.equal(normalizeKenyanPhone("25471234567"), null);
   assert.equal(normalizeKenyanPhone("0700"), null);
@@ -81,6 +82,16 @@ test("PDF receipt output carries payer provenance and registered-account details
     assert.ok(body.includes(expected), `expected receipt content: ${expected}`);
 });
 
+test("PDF receipts label a request-submitted name separately from profile identity", () => {
+  const body = createReceiptPdf({
+    studentName: "",
+    requestStudentName: "Amina Request Snapshot",
+  }).toString("ascii");
+  assert.ok(body.includes("Not available in profile"));
+  assert.ok(body.includes("Name submitted on request"));
+  assert.ok(body.includes("Amina Request Snapshot"));
+});
+
 test("receipt API only serves confirmed payments to the owner or an administrator", async () => {
   const api = await readFile(new URL("api/index.js", root), "utf8"),
     start = api.indexOf("const receiptMatch = path.match("),
@@ -97,6 +108,12 @@ test("receipt API only serves confirmed payments to the owner or an administrato
   assert.match(route, /private, no-store/);
   assert.match(route, /payerNameSource/);
   assert.match(route, /formatMpesaTransactionDate\(paidAt\)/);
+  assert.match(route, /studentName: profileResult\.data\?\.name,/);
+  assert.match(route, /requestStudentName: request\.student_name/);
+  assert.doesNotMatch(
+    route,
+    /studentName: profileResult\.data\?\.name \|\| request\.student_name/,
+  );
 });
 
 test("Daraja status queries are admin-only evidence notes and never mark a payment paid", async () => {
@@ -379,4 +396,91 @@ test("paper-payment uniqueness migration is additive and preflight documented", 
   }
   assert.match(migration, /having count\(\*\) > 1 limit 100/i);
   assert.doesNotMatch(migration, /\b(drop|truncate|delete from)\b/i);
+});
+test("PDF receipts use a branded visual hierarchy while retaining payment provenance", () => {
+  const body = createReceiptPdf({
+    portalName: "Comreds Papers Portal",
+    receipt: "VISUAL123",
+    status: "Confirmed",
+    service: "Refer registration",
+    requestReference: "REF-100",
+    amount: 400,
+    paidAt: "22 Nov 2026, 08:40 EAT",
+    paidAtSource: "Safaricom callback transaction time (EAT)",
+    studentName: "Amina Student",
+    payerName: "Not supplied by M-Pesa",
+    payerNameSource: "Unavailable",
+    paidPhone: "254711111111",
+    confirmationSource: "Safaricom callback",
+  }).toString("ascii");
+  for (const expected of [
+    "COMREDS PAPERS PORTAL",
+    "PAYMENT RECEIPT",
+    "AMOUNT RECEIVED",
+    "KSh 400",
+    "TRANSACTION DETAILS",
+    "REGISTERED LEARNER ACCOUNT",
+    "M-PESA PAYER EVIDENCE",
+    "VISUAL123",
+    "Safaricom callback transaction time",
+    "Helvetica-Bold",
+  ])
+    assert.ok(
+      body.includes(expected),
+      `expected redesigned receipt content: ${expected}`,
+    );
+});
+
+test("WhatsApp support settings normalize Kenyan mobile contacts and link directly to the admin", async () => {
+  const [api, app] = await Promise.all([
+    readFile(new URL("api/index.js", root), "utf8"),
+    readFile(new URL("public/app.js", root), "utf8"),
+  ]);
+  const settingsStart = api.indexOf(
+      'if (method === "POST" && path === "/api/admin/settings")',
+    ),
+    settingsEnd = api.indexOf(
+      'if (method === "POST" && path === "/api/admin/requests/status")',
+      settingsStart,
+    ),
+    settingsRoute = api.slice(settingsStart, settingsEnd);
+  assert.ok(settingsStart >= 0 && settingsEnd > settingsStart);
+  assert.match(settingsRoute, /normalizeKenyanPhone\(rawPhone\)/);
+  assert.match(settingsRoute, /support_phone: phone/);
+  assert.match(app, /function normalizeKenyanWhatsApp\(value\)/);
+  assert.match(app, /254\[17\]\\d\{8\}/);
+  assert.match(app, /https:\/\/wa\.me\/\$\{number\}/);
+  assert.match(app, /aria-label[\s\S]*WhatsApp/);
+});
+
+test("transaction rows identify the learner and exact service without borrowing an admin username", async () => {
+  const app = await readFile(new URL("public/app.js", root), "utf8");
+  assert.match(app, /learnerName =/);
+  assert.match(
+    app,
+    /verifiedLearnerName =\s*learner\.name \|\|\s*\(selfPayment \? state\.user\?\.name : ""\)/,
+  );
+  assert.match(app, /learnerNameLabel = verifiedLearnerName/);
+  assert.match(app, /Name submitted on request/);
+  assert.match(
+    app,
+    /learnerUsername =\s*learner\.username \|\| \(selfPayment \? state\.user\.username : ""\)/,
+  );
+  assert.match(app, /<small class="muted payment-meta">Service paid<\/small>/);
+  assert.match(app, /Academic results request/);
+  assert.match(app, /Refer registration/);
+  assert.match(app, /Name unavailable/);
+});
+
+test("initial rainbow loading is accessible, honors reduced motion, and dashboard failures offer retry", async () => {
+  const [app, css, html] = await Promise.all([
+    readFile(new URL("public/app.js", root), "utf8"),
+    readFile(new URL("public/style.css", root), "utf8"),
+    readFile(new URL("public/index.html", root), "utf8"),
+  ]);
+  assert.match(html, /role="status" aria-live="polite"/);
+  assert.match(css, /conic-gradient\(\s*#ff3d71/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
+  assert.match(app, /id="retryDashboard"/);
+  assert.match(app, /Could not refresh portal data/);
 });

@@ -83,6 +83,13 @@ function formatNairobi(value) {
 function metaLabel(value) {
   return value ? String(value).replaceAll("_", " ") : "unavailable";
 }
+function normalizeKenyanWhatsApp(value) {
+  let digits = String(value || "").replace(/\D/g, "");
+  if (digits.length === 10 && digits.startsWith("0"))
+    digits = `254${digits.slice(1)}`;
+  else if (digits.length === 9 && /^[17]/.test(digits)) digits = `254${digits}`;
+  return /^254[17]\d{8}$/.test(digits) ? digits : "";
+}
 function status(s) {
   let c = ["paid", "success", "delivered"].includes(s)
     ? ""
@@ -125,6 +132,9 @@ function authView() {
   };
 }
 async function load() {
+  if (!state.data && $("#app"))
+    $("#app").innerHTML =
+      '<div class="loading" role="status" aria-live="polite">Loading your secure Comreds portal…</div>';
   try {
     const x = await api(
       `/api/dashboard${state.includeArchived ? "?includeArchived=true" : ""}`,
@@ -133,7 +143,18 @@ async function load() {
     state.user = x.user;
     state.refreshedAt = new Date();
     render();
-  } catch {
+    syncWhatsAppButton();
+  } catch (error) {
+    if (state.data) {
+      toast(`Could not refresh portal data: ${error.message}`);
+      return;
+    }
+    if (state.user) {
+      $("#app").innerHTML =
+        `<div class="load-error" role="alert"><h1>Portal data could not be loaded</h1><p>${esc(error.message || "Check your connection and try again.")}</p><button class="btn" id="retryDashboard">Retry</button></div>`;
+      $("#retryDashboard").onclick = () => load();
+      return;
+    }
     state.user = null;
     state.mode = "login";
     authView();
@@ -272,7 +293,7 @@ function pageContent(d, admin) {
       '<tr><td colspan="6" class="muted">No learner accounts yet.</td></tr>'
     }</table></div><p class="muted">A reset immediately signs out existing sessions and displays a temporary password once. The learner must set a new password at next sign-in; share the temporary password privately.</p></div>`;
   if (title === "System Settings")
-    return `<div class="welcome"><div><h1>System Settings</h1><p class="muted">Configure portal details and administrator-set service prices.</p></div></div><div class="panel"><form id="settingsForm" class="form-grid"><div class="field full"><label>Portal name</label><input name="portalName" value="${esc(d.settings.portalName)}"></div><div class="field"><label>Default paper price (KES)</label><input name="paperPrice" type="number" min="0" max="1000000" step="1" value="${d.settings.paperPrice}" required></div><div class="field"><label>Results request fee (KES)</label><input name="resultsRequestPrice" type="number" min="0" max="1000000" step="1" value="${Number(d.settings.resultsRequestPrice || 0)}" required></div><div class="field"><label>Failed-exam refer registration fee (KES)</label><input name="referRegistrationPrice" type="number" min="0" max="1000000" step="1" value="${Number(d.settings.referRegistrationPrice || 0)}" required></div><div class="field"><label>M-Pesa checkout default phone</label><input name="supportPhone" type="tel" placeholder="+2547XXXXXXXX" value="${esc(d.settings.supportPhone)}"></div><div class="full"><button class="btn">Save settings</button></div></form><p class="muted">Set either academic service fee to KSh 0 to temporarily disable new requests of that type. Existing requests keep their original price snapshot. Prices are whole Kenyan shillings. This number is used as the default STK checkout phone when a learner has no saved phone. Daraja credentials remain server-only.</p></div>`;
+    return `<div class="welcome"><div><h1>System Settings</h1><p class="muted">Configure portal details and administrator-set service prices.</p></div></div><div class="panel"><form id="settingsForm" class="form-grid"><div class="field full"><label>Portal name</label><input name="portalName" value="${esc(d.settings.portalName)}"></div><div class="field"><label>Default paper price (KES)</label><input name="paperPrice" type="number" min="0" max="1000000" step="1" value="${d.settings.paperPrice}" required></div><div class="field"><label>Results request fee (KES)</label><input name="resultsRequestPrice" type="number" min="0" max="1000000" step="1" value="${Number(d.settings.resultsRequestPrice || 0)}" required></div><div class="field"><label>Failed-exam refer registration fee (KES)</label><input name="referRegistrationPrice" type="number" min="0" max="1000000" step="1" value="${Number(d.settings.referRegistrationPrice || 0)}" required></div><div class="field"><label>Admin WhatsApp / M-Pesa default phone</label><input name="supportPhone" type="tel" placeholder="07XXXXXXXX or +2547XXXXXXXX" value="${esc(d.settings.supportPhone)}"><small class="muted">Use a Kenyan mobile number; it is saved in +254… format and used for the floating WhatsApp support button.</small></div><div class="full"><button class="btn">Save settings</button></div></form><p class="muted">Set either academic service fee to KSh 0 to temporarily disable new requests of that type. Existing requests keep their original price snapshot. Prices are whole Kenyan shillings. This number is also the WhatsApp support contact. It is used as the default STK checkout phone when a learner has no saved phone. Enter 07… or 01… locally; the portal stores the canonical +254… format. Daraja credentials remain server-only.</p></div>`;
   if (title === "Emergency Papers")
     return `<div class="welcome"><div><h1>Emergency Papers & Notices</h1><p class="muted">Urgent revision materials and important updates.</p></div></div>${admin ? `<div class="panel"><h2>Publish notice</h2><form id="noticeForm"><div class="field"><label>Title</label><input name="title" required></div><div class="field"><label>Message</label><textarea name="body" required></textarea></div><button class="btn">Publish notice</button></form></div>` : ""}<div class="panel">${notices.map((n) => `<div class="notice"><b>📢 ${esc(n.title)}</b><div>${esc(n.body)}</div><small>${new Date(n.createdAt).toLocaleString()}</small></div>`).join("")}</div>`;
   if (title === "Requests & Orders" || title === "My Papers")
@@ -318,13 +339,31 @@ function pageContent(d, admin) {
         .map((x) => {
           const q = req.find((r) => r.id === x.requestId) || {},
             learner = users.find((user) => user.id === x.userId) || {},
+            resultRequest =
+              resultRequests.find((r) => r.id === x.resultRequestId) || {},
+            referRequest =
+              referRequests.find((r) => r.id === x.referRequestId) || {},
+            selfPayment = state.user?.id === x.userId,
+            verifiedLearnerName =
+              learner.name || (selfPayment ? state.user?.name : ""),
+            learnerName =
+              verifiedLearnerName || q.studentName || "Name unavailable",
+            learnerNameLabel = verifiedLearnerName
+              ? "Registered learner"
+              : q.studentName
+                ? "Name submitted on request"
+                : "Registered learner",
+            learnerUsername =
+              learner.username || (selfPayment ? state.user.username : ""),
+            learnerEmail =
+              learner.email || (selfPayment ? state.user.email : ""),
             serviceName =
               x.serviceType === "results"
-                ? "Academic results"
+                ? `Academic results request${resultRequest.institutionName ? ` · ${resultRequest.institutionName}` : ""}`
                 : x.serviceType === "refer"
-                  ? "Refer registration"
+                  ? `Refer registration${referRequest.examPeriod ? ` · ${referRequest.examPeriod}` : ""}`
                   : q.title || "Paper order",
-            serviceId = x.resultRequestId || x.referRequestId,
+            serviceId = x.resultRequestId || x.referRequestId || x.requestId,
             payerName = x.payerName || "unavailable",
             payerNameSource = x.payerNameSource,
             payerPhone = x.paidPhone || "—",
@@ -332,26 +371,13 @@ function pageContent(d, admin) {
             source = x.paidAtSource,
             confirmation = x.confirmationSource,
             reconciliationStatus = x.reconciliationStatus,
-            websiteIdentity =
-              [
-                learner.name ||
-                  q.studentName ||
-                  (state.user?.id === x.userId ? state.user.name : ""),
-                learner.username ||
-                (state.user?.id === x.userId ? state.user.username : "")
-                  ? `@${learner.username || state.user.username}`
-                  : "",
-                learner.email ||
-                  (state.user?.id === x.userId ? state.user.email : ""),
-              ]
-                .filter(Boolean)
-                .join(" · ") || "—",
             receiptLink =
               x.status === "success"
                 ? `<a class="icon receipt-link" href="/api/payments/${encodeURIComponent(x.id)}/receipt" download>Download PDF receipt</a>`
                 : "",
-            archived = Boolean(x.archived || x.archivedAt || x.isArchived);
-          return `<tr class="${archived ? "archived-row" : ""}"><td>${esc(formatNairobi(transactionTime))}<small class="muted payment-meta">Paid-time source: ${esc(metaLabel(source))}</small></td>${admin ? `<td><b>Website registration</b><small class="muted payment-meta">${esc(websiteIdentity)}</small><b class="payer-label">M-Pesa payer</b><small class="muted payment-meta">${esc(payerName)}</small><small class="muted payment-meta">Name source: ${esc(metaLabel(payerNameSource))}</small></td>` : `<td><b>Website registration</b><small class="muted payment-meta">${esc(websiteIdentity)}</small><b class="payer-label">M-Pesa payer</b><small class="muted payment-meta">${esc(payerName)}</small><small class="muted payment-meta">Name source: ${esc(metaLabel(payerNameSource))}</small></td>`}<td>${esc(serviceName)}${serviceId ? `<small class="muted service-ref"> · ${esc(String(serviceId).slice(0, 8))}</small>` : ""}</td><td>KSh ${esc(String(x.amount ?? "—"))}</td><td>${esc(payerPhone)}</td><td>${status(x.status)}<small class="muted payment-meta">Confirmation source: ${esc(metaLabel(confirmation))}</small><small class="muted payment-meta">Reconciliation: ${esc(metaLabel(reconciliationStatus))}</small></td><td>${esc(x.receipt || "—")}${x.receipt ? ` <button class="icon" data-copy="${esc(x.receipt)}">Copy</button>` : ""}${receiptLink}</td><td>${archived ? `<button class="icon" data-archive-type="payment" data-archive-id="${esc(x.id)}" data-archive-action="restore">Restore</button>` : `<button class="icon" data-archive-type="payment" data-archive-id="${esc(x.id)}" data-archive-action="archive">Archive</button>`}${admin && ["pending", "initiated"].includes(String(x.status || "").toLowerCase()) && !archived ? ` <button class="icon" data-reconcile-payment="${esc(x.id)}">Reconcile</button>` : ""}</td></tr>`;
+            archived = Boolean(x.archived || x.archivedAt || x.isArchived),
+            amount = Number(x.paidAmount) || Number(x.amount) || 0;
+          return `<tr class="${archived ? "archived-row" : ""}"><td>${esc(formatNairobi(transactionTime))}<small class="muted payment-meta">Paid-time source: ${esc(metaLabel(source))}</small></td><td><b>${esc(learnerNameLabel)}</b><small class="muted learner-name">${esc(learnerName)}</small>${learnerUsername ? `<small class="muted payment-meta">@${esc(learnerUsername)}</small>` : ""}${learnerEmail ? `<small class="muted payment-meta">${esc(learnerEmail)}</small>` : ""}<b class="payer-label">M-Pesa payer</b><small class="muted payment-meta">${esc(payerName)}</small><small class="muted payment-meta">Name source: ${esc(metaLabel(payerNameSource))}</small></td><td><b class="service-name">${esc(serviceName)}</b><small class="muted payment-meta">Service paid</small>${serviceId ? `<small class="muted service-ref">Request #${esc(String(serviceId).slice(0, 8))}</small>` : ""}</td><td>KSh ${esc(String(amount))}</td><td>${esc(payerPhone)}</td><td>${status(x.status)}<small class="muted payment-meta">Confirmation source: ${esc(metaLabel(confirmation))}</small><small class="muted payment-meta">Reconciliation: ${esc(metaLabel(reconciliationStatus))}</small></td><td>${esc(x.receipt || "—")}${x.receipt ? ` <button class="icon" data-copy="${esc(x.receipt)}">Copy</button>` : ""}${receiptLink}</td><td>${archived ? `<button class="icon" data-archive-type="payment" data-archive-id="${esc(x.id)}" data-archive-action="restore">Restore</button>` : `<button class="icon" data-archive-type="payment" data-archive-id="${esc(x.id)}" data-archive-action="archive">Archive</button>`}${admin && ["pending", "initiated"].includes(String(x.status || "").toLowerCase()) && !archived ? ` <button class="icon" data-reconcile-payment="${esc(x.id)}">Reconcile</button>` : ""}</td></tr>`;
         })
         .join("");
     return `<div class="welcome"><div><h1>${admin ? "Transactions" : "Payments & Transaction History"}</h1><p class="muted">Payment records show website registration and payer details separately. PDF receipts are available for confirmed payments.</p></div></div>${admin ? adminCharts(pays, req) : ""}${
@@ -383,7 +409,7 @@ function pageContent(d, admin) {
               "",
             )}</select></div><div class="field"><label>Receipt code (verified against transaction evidence)</label><input name="receipt" required maxlength="80" autocomplete="off"></div><div class="field"><label>Payer phone shown in evidence</label><input name="payerPhone" type="tel" required maxlength="32" placeholder="Phone shown on transaction"></div><div class="field"><label>Transaction time (optional, EAT)</label><input name="paidAt" type="datetime-local"><small class="muted">Enter only if visible in evidence. This local time is sent with the EAT +03:00 offset.</small></div><div class="field full"><label class="verify-name"><input type="checkbox" id="payerNameVerified"> I can verify the payer name from transaction evidence</label><input name="payerName" id="payerNameInput" maxlength="100" placeholder="Verified payer name (optional)" disabled></div><div class="full"><button class="btn">Record verified manual payment</button></div></form></div>`
         : ""
-    }<div class="panel"><h2>Payment records</h2><div class="table-wrap"><table><tr><th>Transaction time / source</th><th>${admin ? "Website and payer identity" : "Payer identity"}</th><th>Service</th><th>Amount</th><th>Payer phone</th><th>Confirmation / reconciliation</th><th>Receipt / PDF</th><th>Record actions</th></tr>${paymentRows || `<tr><td colspan="8" class="muted">No payments recorded.</td></tr>`}</table></div></div>`;
+    }<div class="panel"><h2>Payment records</h2><div class="table-wrap"><table><tr><th>Transaction time / source</th><th>Registered learner / M-Pesa payer</th><th>Service</th><th>Amount</th><th>Payer phone</th><th>Confirmation / reconciliation</th><th>Receipt / PDF</th><th>Record actions</th></tr>${paymentRows || `<tr><td colspan="8" class="muted">No payments recorded.</td></tr>`}</table></div></div>`;
   }
   if (title === "Security")
     return `<div class="welcome"><div><h1>${d.user.mustChangePassword ? "Set a new password" : "Account security"}</h1><p class="muted">${d.user.mustChangePassword ? "Your administrator issued a temporary password. Choose a new password to unlock the portal." : "Rotate your password; your current session will be signed out afterward."}</p></div></div><div class="panel"><form id="passwordForm" class="form-grid">${d.user.mustChangePassword ? "" : `<div class="field"><label>Current password</label><input name="currentPassword" type="password" autocomplete="current-password" required></div>`}<div class="field"><label>New password (12 characters minimum)</label><input name="newPassword" type="password" minlength="12" autocomplete="new-password" required></div><div class="field"><label>Confirm new password</label><input name="confirmPassword" type="password" minlength="12" autocomplete="new-password" required></div><div class="full"><button class="btn">${d.user.mustChangePassword ? "Set new password" : "Change password"}</button></div></form></div>`;
@@ -1585,6 +1611,18 @@ function showReady(s, paperId) {
     if (e.target === o) o.remove();
   };
 }
+function syncWhatsAppButton(button = document.querySelector("#waBtn")) {
+  if (!button) return;
+  const number =
+    normalizeKenyanWhatsApp(state.data?.settings?.supportPhone) ||
+    "254723278526";
+  button.href = `https://wa.me/${number}?text=${encodeURIComponent("Hello Comreds support, I need help with the portal.")}`;
+  button.title = "Chat with Comreds support on WhatsApp";
+  button.setAttribute(
+    "aria-label",
+    "Chat with the Comreds administrator on WhatsApp",
+  );
+}
 (() => {
   const t0 = document.title;
   addEventListener("offline", () => toast("You are offline."));
@@ -1597,16 +1635,14 @@ function showReady(s, paperId) {
   });
   const w = document.createElement("a");
   w.id = "waBtn";
-  w.textContent = "💬";
-  w.title = "Chat with support on WhatsApp";
+  w.innerHTML = `<svg viewBox="0 0 32 32" aria-hidden="true" focusable="false"><path fill="currentColor" d="M16 2.6A13.3 13.3 0 0 0 4.6 22.8L2.8 29l6.4-1.7A13.3 13.3 0 1 0 16 2.6Zm0 2.3a11 11 0 0 1 0 22 10.9 10.9 0 0 1-5.6-1.5l-.4-.2-3.8 1 1-3.7-.2-.4A11 11 0 0 1 16 4.9Z"/><path fill="#25d366" d="M11.2 9.2c-.3-.7-.7-.7-1-.7h-.8c-.3 0-.7.1-1 .5-.4.4-1.3 1.3-1.3 3.1s1.3 3.6 1.5 3.9c.2.3 2.6 4.1 6.4 5.6 3.1 1.2 3.8 1 4.5.9.7-.1 2.3-.9 2.6-1.8.3-.9.3-1.7.2-1.9-.1-.2-.4-.3-.8-.5-.4-.2-2.3-1.1-2.7-1.2-.4-.1-.7-.2-.9.2-.3.4-1 1.2-1.2 1.4-.2.3-.4.3-.8.1-.4-.2-1.7-.6-3.2-2-1.2-1.1-2-2.4-2.2-2.8-.2-.4 0-.6.2-.8.2-.2.4-.5.6-.7.2-.2.3-.4.4-.7.1-.3 0-.5-.1-.7-.1-.2-1-2.4-1.4-3.2Z"/></svg><span class="sr-only">Chat with Comreds support on WhatsApp</span>`;
+  w.title = "Chat with Comreds support on WhatsApp";
+  w.setAttribute(
+    "aria-label",
+    "Chat with the Comreds administrator on WhatsApp",
+  );
   w.target = "_blank";
   w.rel = "noopener";
-  w.href = "https://wa.me/254723278526";
-  w.onclick = () => {
-    const p = String(
-      state.data?.settings?.supportPhone || "+254723278526",
-    ).replace(/\D/g, "");
-    w.href = "https://wa.me/" + p;
-  };
+  syncWhatsAppButton(w);
   document.body.appendChild(w);
 })();

@@ -147,6 +147,43 @@ Use archive/hide/restore metadata for paper, results and refer requests and paym
 9. Expanded admin CSV export with payment confirmation time, payer name/provenance, phone, receipt and archive state.
 10. Operational audit/alerts for unmatched or mismatched callbacks and regression checks for receipt ownership, duplicate handling, archive safety and reconciliation safeguards.
 
+## 2026-11-22 — receipt design, legacy-paper recovery and visual polish
+
+### Implementation approach
+
+Keep the established academic command-center identity, but deepen the page surfaces with layered blue/teal gradients, clearer color-coded states and more deliberate responsive spacing. Use a lightweight vector WhatsApp-style mark and normalize Kenyan mobile numbers to `254` plus nine digits before constructing `wa.me` links. Render a distinct, accessible rainbow loader for initial and dashboard loading states; honor reduced-motion preferences. Make dashboard errors retryable and visible rather than silently returning learners to sign-in.
+
+Redesign the dependency-free PDF receipt as a branded, vector-drawn document with a strong amount hierarchy, readable transaction/account/payer sections, and explicit evidence-source labels. Keep the receipt private and role-scoped, and never imply that an M-Pesa prompt phone is the payer's verified name. Make learner name and paid service prominent in transaction rows, fixing the username fallback so an administrator's own username cannot appear as the learner's identity.
+
+Treat `public.papers` as the canonical learner catalog. Restore only a verified legacy learning-paper object from the private `papers` bucket, at the configured paper price, while explicitly excluding result-file paths and any unverified objects. Keep normal catalog rendering metadata-driven; do not expose every Storage object as a paper. Current inspection found one orphaned KCSE paper file and one separate object under `results/`, which must remain excluded from the paper catalog.
+
+### Design direction
+
+Reuse and refine the existing premium academic command-center look: confident navy foundations, vivid teal/cyan/blue accents, warm high-contrast highlights, and clean white cards over a softly layered background. Keep text contrast high, forms compact but breathable, and mobile transaction/catalog views easy to scan. Use short transitions and an indeterminate rainbow sweep/spinner only for loading; support `prefers-reduced-motion` by removing nonessential animation. Preserve the existing DM Sans / Playfair Display pairing and current static frontend/API architecture.
+
+### Twenty further advanced upgrades — proposals, not implemented here
+
+1. Paper-file integrity scanner with checksum validation and broken-link alerts.
+2. Versioned paper revisions with immutable edit history and restore points.
+3. Safe bulk catalog import with preview, duplicate detection and rollback.
+4. Syllabus/topic metadata and multi-facet paper search.
+5. Full-text search across indexed paper text with OCR for scanned PDFs.
+6. Learner bookmarks, annotations and synced study notes.
+7. Practice quizzes generated from admin-approved question banks.
+8. Topic-level learner progress and weak-area dashboards.
+9. Personalized revision plans based on exam dates and completed topics.
+10. Study timetable builder with optional reminders.
+11. Offline/PWA access for already purchased materials.
+12. Paper feedback/report queue for outdated or corrupt materials.
+13. Verified learner ratings and moderated paper reviews.
+14. Subject-based moderated study groups and discussion threads.
+15. Tutor/teacher appointment requests and availability slots.
+16. Exam countdown calendar with milestone checklist.
+17. Accessibility controls for text scaling, contrast and dyslexia-friendly type.
+18. Swahili/English interface localization and translated notices.
+19. Admin audit-log search, export and retention controls.
+20. Automated backup/restore drills and storage/database integrity reporting.
+
 ### Project structure and constraints
 
 Keep the UI in `public/app.js` and `public/style.css`; add focused pure helpers for M-Pesa timestamps and PDF receipt bytes under `api/`; keep authorization, persistence, reconciliation, archive and callback routes in `api/index.js`; add additive payment/request columns and indexes to `supabase/schema.sql`; and extend focused tests and `DEPLOYMENT.md`. The callback format reviewed from a technical Daraja integration guide supplies `Amount`, `MpesaReceiptNumber`, `TransactionDate`, and `PhoneNumber`, but does not supply the payer's registered name. Safaricom's public API pages identify M-Pesa Express and Transaction Status as APIs without displaying full response schemas on the accessible page; live credentials and an end-to-end sandbox prompt are not present. Therefore no implementation can promise that no payment will ever be missed; the product must surface callback gaps and reconciliation work rather than falsely declaring a payment successful.
