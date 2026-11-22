@@ -1864,12 +1864,12 @@ textarea:focus-visible {
   padding: 44px clamp(18px, 4vw, 56px) 56px;
   isolation: isolate;
   background:
-    radial-gradient(
-      ellipse at 50% 10%,
-      rgba(255, 255, 255, 0.96),
-      transparent 56%
+    linear-gradient(
+      180deg,
+      rgba(247, 252, 255, 0.44),
+      rgba(246, 250, 255, 0.58)
     ),
-    linear-gradient(180deg, #e6f5ff 0%, #f8fcff 58%, #e4f0ff 100%);
+    url("/images/cdacc-school-learner-background.jpg") center / cover no-repeat;
 }
 .cdacc-login-stage::after {
   position: absolute;
@@ -2287,6 +2287,9 @@ textarea:focus-visible {
   .cdacc-login-stage {
     min-height: 0;
     padding: 24px 14px 47px;
+    background-position:
+      center,
+      30% center;
   }
   .cdacc-login-panels {
     grid-template-columns: minmax(0, 1fr);

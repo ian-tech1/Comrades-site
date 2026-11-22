@@ -505,7 +505,7 @@ test("initial rainbow loading is accessible, honors reduced motion, and dashboar
 });
 
 test("CDACC welcome recreates the reference with live accessible auth panels and preserves existing routes", async () => {
-  const [api, app, css, schema, migration] = await Promise.all([
+  const [api, app, css, schema, migration, scenicPhoto] = await Promise.all([
     readFile(new URL("api/index.js", root), "utf8"),
     readFile(new URL("public/app.js", root), "utf8"),
     readFile(new URL("public/style.css", root), "utf8"),
@@ -516,6 +516,9 @@ test("CDACC welcome recreates the reference with live accessible auth panels and
         root,
       ),
       "utf8",
+    ),
+    readFile(
+      new URL("public/images/cdacc-school-learner-background.jpg", root),
     ),
   ]);
   const meStart = api.indexOf('if (method === "GET" && path === "/api/me")'),
@@ -624,14 +627,14 @@ test("CDACC welcome recreates the reference with live accessible auth panels and
   assert.match(app, /setAttribute\("role", "status"\)/);
   assert.match(app, /setAttribute\("aria-live", "polite"\)/);
 
-  assert.doesNotMatch(
-    app,
-    /auth-background-image|cdacc-exam-portal-welcome\.jpg/,
+  assert.doesNotMatch(app, /cdacc-exam-portal-welcome\.jpg/);
+  assert.match(css, /url\("\/images\/cdacc-school-learner-background\.jpg"\)/);
+  assert.doesNotMatch(css, /url\([^)]*cdacc-exam-portal-welcome\.jpg/i);
+  assert.ok(
+    scenicPhoto.subarray(0, 2).equals(Buffer.from([0xff, 0xd8])),
+    "welcome background is a separate JPEG photo asset",
   );
-  assert.doesNotMatch(
-    css,
-    /auth-background-image|cdacc-exam-portal-welcome\.jpg/,
-  );
+  assert.match(css, /background-position:\s*center,\s*30%\s*center/);
   assert.match(css, /\.auth-theme-cdacc\s*\{/);
   assert.match(
     css,
