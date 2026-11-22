@@ -57,6 +57,9 @@ async function api0(url, opts = {}) {
 function toast(s) {
   let e = document.createElement("div");
   e.className = "toast";
+  e.setAttribute("role", "status");
+  e.setAttribute("aria-live", "polite");
+  e.setAttribute("aria-atomic", "true");
   e.textContent = s;
   document.body.append(e);
   setTimeout(() => e.remove(), 4000);
@@ -105,31 +108,134 @@ function authView() {
   const admin = state.mode === "admin",
     design = ["cdacc", "classic", "navy"].includes(state.loginDesign)
       ? state.loginDesign
-      : "cdacc",
-    backgroundVisual =
-      design === "cdacc"
-        ? `<img class="auth-background-image" src="/images/cdacc-exam-portal-welcome.jpg" alt="" aria-hidden="true" fetchpriority="high">`
-        : "",
-    welcomeVisual =
+      : "cdacc";
+
+  if (design === "cdacc") {
+    const icons = {
+      cap: `<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M3 16 24 5l21 11-21 11L3 16Z"/><path d="M11 21v9c7 6 19 6 26 0v-9M43 18v13"/><circle cx="43" cy="34" r="2"/></svg>`,
+      student: `<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M4 17 24 6l20 11-20 11L4 17Z"/><path d="M12 22v9c6 5 18 5 24 0v-9M41 19v12"/><circle cx="41" cy="34" r="2"/></svg>`,
+      admin: `<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="15" r="8"/><path d="M9 42c1-10 6-15 15-15s14 5 15 15"/><circle cx="24" cy="24" r="21" fill="none" stroke="currentColor" stroke-width="2"/></svg>`,
+      user: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M4.5 20c.6-4.1 3.1-6.2 7.5-6.2s6.9 2.1 7.5 6.2"/></svg>`,
+      lock: `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="10" width="15" height="11" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3M12 14v3"/></svg>`,
+      eye: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.4-6 9.5-6 9.5 6 9.5 6-3.4 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="3"/><path class="eye-slash" d="m3 3 18 18"/></svg>`,
+      enter: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v16h-6M3 12h12m-5-5 5 5-5 5"/></svg>`,
+      calendar: `<svg viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="6" width="24" height="22" rx="3"/><path d="M10 3v6m12-6v6M4 12h24M10 17h3m5 0h4m-12 5h3m5 0h4"/></svg>`,
+      paper: `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 3h13l6 6v20H7zM20 3v7h6M11 16h11m-11 5h11m-11 5h7"/><circle cx="23" cy="23" r="7"/><path d="m20 23 2 2 4-5"/></svg>`,
+      chart: `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 27h25M7 23l7-8 5 4 9-12M23 7h5v5M9 25v-5m7 5v-9m7 9v-6"/></svg>`,
+      shield: `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3 27 7v8c0 7-4 11-11 14C9 26 5 22 5 15V7l11-4Z"/><path d="m11 16 4 4 7-8"/></svg>`,
+    };
+    const passwordField = (id, autocomplete) =>
+      `<div class="cdacc-field"><label for="${id}">Password</label><div class="cdacc-control"><span class="cdacc-control-icon">${icons.lock}</span><input id="${id}" name="password" type="password" minlength="8" required autocomplete="${autocomplete}" placeholder="Password"><button type="button" class="cdacc-password-toggle" data-password-toggle="${id}" aria-label="Show password" aria-pressed="false">${icons.eye}</button></div></div>`;
+    const studentFields =
+      state.mode === "register"
+        ? `<div class="cdacc-field"><label for="student-username">Username</label><div class="cdacc-control"><span class="cdacc-control-icon">${icons.user}</span><input id="student-username" name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,31}" autocomplete="username" placeholder="Choose a username"></div></div><div class="cdacc-field"><label for="student-name">Full name</label><input class="cdacc-plain-input" id="student-name" name="name" required placeholder="Your full name" autocomplete="name"></div><div class="cdacc-field"><label for="student-email">Email address</label><input class="cdacc-plain-input" id="student-email" name="email" type="email" required placeholder="you@example.com" autocomplete="email"></div><div class="cdacc-field"><label for="student-phone">Phone number</label><input class="cdacc-plain-input" id="student-phone" name="phone" placeholder="07XXXXXXXX" autocomplete="tel"></div>${passwordField("student-password", "new-password")}`
+        : `<div class="cdacc-field"><label for="student-identifier">Registration Number</label><div class="cdacc-control"><span class="cdacc-control-icon">${icons.user}</span><input id="student-identifier" name="identifier" required autocomplete="username" placeholder="Registration Number"></div><small class="cdacc-field-hint">Use your portal username or email if your registration number is not your username.</small></div>${passwordField("student-password", "current-password")}`;
+
+    $("#app").innerHTML =
+      `<div class="cdacc-portal auth-theme-cdacc ${admin ? "auth-mode-admin" : "auth-mode-student"}">
+      <header class="cdacc-header">
+        <div class="cdacc-brand-lockup">
+          <div class="cdacc-emblem" role="img" aria-label="CDACC emblem">${icons.cap}<span>CDACC</span></div>
+          <div class="cdacc-wordmark"><h1>CDACC</h1><p>ASSESSMENT AND CERTIFICATION<br>DEVELOPMENT CENTRE</p><span class="cdacc-exam-pill">EXAMINATION PORTAL</span></div>
+        </div>
+        <div class="cdacc-tagline"><span>Your Skills,</span><strong>Our Priority</strong><i aria-hidden="true"></i></div>
+      </header>
+      <main class="cdacc-login-stage">
+        <div class="cdacc-login-panels">
+          <section class="cdacc-login-panel cdacc-student-panel" aria-labelledby="studentsLoginTitle">
+            <header class="cdacc-panel-header cdacc-student-header"><span class="cdacc-panel-icon">${icons.student}</span><div><h2 id="studentsLoginTitle">Students Login</h2><p>Access your exams and results</p></div></header>
+            <div class="cdacc-panel-body">
+              ${state.mode === "register" ? `<h3 class="cdacc-form-title">New Student Registration</h3>` : ""}
+              <form id="authForm" class="cdacc-auth-form">
+                ${studentFields}
+                <button class="cdacc-submit cdacc-student-submit" type="submit">${icons.enter}<span>${state.mode === "register" ? "Create Account" : "Login"}</span></button>
+              </form>
+              <div class="cdacc-panel-links">${state.mode === "register" ? `Already registered? <button type="button" class="cdacc-text-link" id="login">Sign in</button>` : `<button type="button" class="cdacc-text-link" id="studentForgot">Forgot Password?</button><span class="cdacc-link-divider" aria-hidden="true">|</span><span>New Student?</span><button type="button" class="cdacc-text-link" id="register">Register Here</button>`}</div>
+            </div>
+          </section>
+          <section class="cdacc-login-panel cdacc-admin-panel" aria-labelledby="adminLoginTitle">
+            <header class="cdacc-panel-header cdacc-admin-header"><span class="cdacc-panel-icon">${icons.admin}</span><div><h2 id="adminLoginTitle"><button class="cdacc-admin-toggle" id="adminLogin" type="button" aria-pressed="${admin}">Admin Login</button></h2><p>Manage the portal</p></div></header>
+            <div class="cdacc-panel-body">
+              <form id="adminAuthForm" class="cdacc-auth-form">
+                <div class="cdacc-field"><label for="admin-identifier">Username</label><div class="cdacc-control"><span class="cdacc-control-icon">${icons.user}</span><input id="admin-identifier" name="identifier" required autocomplete="username" placeholder="Username"></div></div>
+                ${passwordField("admin-password", "current-password")}
+                <button class="cdacc-submit cdacc-admin-submit" type="submit">${icons.enter}<span>Login</span></button>
+              </form>
+              <div class="cdacc-panel-links"><button type="button" class="cdacc-text-link" id="adminForgot">Forgot Password?</button><span class="cdacc-link-divider" aria-hidden="true">|</span><button type="button" class="cdacc-text-link" id="contactSupport">Contact Support</button></div>
+            </div>
+          </section>
+        </div>
+      </main>
+      <footer class="cdacc-footer">
+        <div class="cdacc-feature-strip">
+          <div class="cdacc-feature">${icons.calendar}<span>Book<br>Exams</span></div>
+          <div class="cdacc-feature">${icons.paper}<span>Take Your<br>Exams</span></div>
+          <div class="cdacc-feature">${icons.chart}<span>View<br>Results</span></div>
+          <div class="cdacc-feature">${icons.shield}<span>Secure &amp; Reliable<br>Platform</span></div>
+        </div>
+        <p class="cdacc-motto"><span aria-hidden="true"></span>CDACC – Empowering Skills for a Better Future<span aria-hidden="true"></span></p>
+      </footer>
+    </div>`;
+  } else {
+    const welcomeVisual =
       design === "navy"
         ? `<div class="auth-welcome-note"><span>SECURE LEARNER ACCESS</span><strong>Study with confidence.</strong><p>Your existing account and sign-in details work exactly as before.</p></div>`
         : "";
-  $("#app").innerHTML =
-    `<div class="auth auth-theme-${design}">${backgroundVisual}<section class="auth-intro"><div class="brand"><span class="brand-icon">🎓</span><div><strong>Comreds Papers Portal</strong><small>Learn · Prepare · Succeed</small></div></div><h1>Your revision journey starts here.</h1><p>Request, pay for and access learning materials from one secure student portal.</p>${welcomeVisual}</section><section class="auth-card"><h2>${state.mode === "register" ? "Create learner account" : admin ? "Administrator sign in" : "Welcome back"}</h2><p class="muted">${state.mode === "register" ? "Choose a username to sign in and add your contact details." : "Sign in with your username and password."}</p><form id="authForm">${state.mode === "register" ? `<div class="field"><label for="auth-username">Username</label><input id="auth-username" name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,31}" autocomplete="username" placeholder="e.g. learner_01"></div><div class="field"><label for="auth-name">Full name</label><input id="auth-name" name="name" required></div><div class="field"><label for="auth-email">Email address</label><input id="auth-email" name="email" type="email" required autocomplete="email"></div><div class="field"><label for="auth-phone">Phone number</label><input id="auth-phone" name="phone" placeholder="07XXXXXXXX"></div>` : `<div class="field"><label for="auth-identifier">Username or email</label><input id="auth-identifier" name="identifier" required autocomplete="username" placeholder="Your username"></div>`}<div class="field"><label for="auth-password">Password</label><input id="auth-password" name="password" type="password" minlength="8" required autocomplete="${state.mode === "register" ? "new-password" : "current-password"}"></div><button class="btn" style="width:100%">${state.mode === "register" ? "Create account" : "Sign in"}</button></form><p style="margin-top:18px">${!admin && state.mode !== "register" ? `New learner? <button class="link" id="register">Create account</button>` : ""}${state.mode === "register" ? `Already registered? <button class="link" id="login">Sign in</button>` : ""}</p>${!admin && state.mode !== "register" ? '<p class="recovery-note">Forgot your password? Contact the portal administrator to reset it. A temporary password will be issued and must be changed at your next sign-in.</p>' : ""}<button class="link" id="adminLogin">Administrator access</button></section></div>`;
-  $("#authForm").onsubmit = async (e) => {
-    e.preventDefault();
-    const b = Object.fromEntries(new FormData(e.target));
-    try {
-      const x = await api(
-        state.mode === "register" ? "/api/register" : "/api/login",
-        { method: "POST", body: JSON.stringify(b) },
+    $("#app").innerHTML =
+      `<div class="auth auth-theme-${design}"><section class="auth-intro"><div class="brand"><span class="brand-icon">🎓</span><div><strong>Comreds Papers Portal</strong><small>Learn · Prepare · Succeed</small></div></div><h1>Your revision journey starts here.</h1><p>Request, pay for and access learning materials from one secure student portal.</p>${welcomeVisual}</section><section class="auth-card"><h2>${state.mode === "register" ? "Create learner account" : admin ? "Administrator sign in" : "Welcome back"}</h2><p class="muted">${state.mode === "register" ? "Choose a username to sign in and add your contact details." : "Sign in with your username and password."}</p><form id="authForm">${state.mode === "register" ? `<div class="field"><label for="auth-username">Username</label><input id="auth-username" name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,31}" autocomplete="username" placeholder="e.g. learner_01"></div><div class="field"><label for="auth-name">Full name</label><input id="auth-name" name="name" required></div><div class="field"><label for="auth-email">Email address</label><input id="auth-email" name="email" type="email" required autocomplete="email"></div><div class="field"><label for="auth-phone">Phone number</label><input id="auth-phone" name="phone" placeholder="07XXXXXXXX"></div>` : `<div class="field"><label for="auth-identifier">Username or email</label><input id="auth-identifier" name="identifier" required autocomplete="username" placeholder="Your username"></div>`}<div class="field"><label for="auth-password">Password</label><input id="auth-password" name="password" type="password" minlength="8" required autocomplete="${state.mode === "register" ? "new-password" : "current-password"}"></div><button class="btn" style="width:100%">${state.mode === "register" ? "Create account" : "Sign in"}</button></form><p style="margin-top:18px">${!admin && state.mode !== "register" ? `<button type="button" class="link" id="register">New learner? Create account</button>` : ""}${state.mode === "register" ? `<button type="button" class="link" id="login">Already registered? Sign in</button>` : ""}</p>${!admin && state.mode !== "register" ? '<p class="recovery-note">Forgot your password? Contact the portal administrator to reset it. A temporary password will be issued and must be changed at your next sign-in.</p>' : ""}<button type="button" class="link" id="adminLogin">Administrator access</button></section></div>`;
+  }
+  bindAuthControls(design);
+  if (design === "cdacc") loadSupportContact();
+}
+function loadSupportContact() {
+  api("/api/support/contact")
+    .then(({ supportPhone }) => {
+      const number = normalizeKenyanWhatsApp(supportPhone),
+        button = $("#contactSupport");
+      if (!number || !button) return;
+      const anchor = document.createElement("a");
+      anchor.id = button.id;
+      anchor.className = button.className;
+      anchor.href = `https://wa.me/${number}?text=${encodeURIComponent("Hello Comreds support, I need help with the CDACC examination portal.")}`;
+      anchor.target = "_blank";
+      anchor.rel = "noopener noreferrer";
+      anchor.setAttribute(
+        "aria-label",
+        "Contact support on WhatsApp (opens in a new tab)",
       );
-      state.user = x.user;
+      anchor.textContent = button.textContent;
+      button.replaceWith(anchor);
+    })
+    .catch(() => {});
+}
+function bindAuthControls(design) {
+  const submitAuth = async (e, mode) => {
+    e.preventDefault();
+    const values = Object.fromEntries(new FormData(e.currentTarget));
+    state.mode = mode;
+    try {
+      const result = await api(
+        mode === "register" ? "/api/register" : "/api/login",
+        { method: "POST", body: JSON.stringify(values) },
+      );
+      state.user = result.user;
       await load();
-    } catch (err) {
-      toast(err.message);
+    } catch (error) {
+      toast(error.message);
     }
   };
+  $("#authForm")?.addEventListener("submit", (event) => {
+    const mode =
+      state.mode === "register"
+        ? "register"
+        : design === "cdacc"
+          ? "login"
+          : state.mode;
+    return submitAuth(event, mode);
+  });
+  $("#adminAuthForm")?.addEventListener("submit", (event) =>
+    submitAuth(event, "admin"),
+  );
   $("#register")?.addEventListener("click", () => {
     state.mode = "register";
     authView();
@@ -138,10 +244,37 @@ function authView() {
     state.mode = "login";
     authView();
   });
-  $("#adminLogin").onclick = () => {
-    state.mode = admin ? "login" : "admin";
+  $("#adminLogin")?.addEventListener("click", () => {
+    state.mode = state.mode === "admin" ? "login" : "admin";
     authView();
-  };
+  });
+  document.querySelectorAll("[data-password-toggle]").forEach((toggle) => {
+    toggle.addEventListener("click", () => {
+      const input = document.getElementById(toggle.dataset.passwordToggle);
+      if (!input) return;
+      const visible = input.type === "password";
+      input.type = visible ? "text" : "password";
+      toggle.classList.toggle("is-visible", visible);
+      toggle.setAttribute("aria-pressed", String(visible));
+      toggle.setAttribute(
+        "aria-label",
+        visible ? "Hide password" : "Show password",
+      );
+    });
+  });
+  $("#studentForgot")?.addEventListener("click", () =>
+    toast(
+      "Contact the portal administrator to reset your password. A temporary password must be changed at your next sign-in.",
+    ),
+  );
+  $("#adminForgot")?.addEventListener("click", () =>
+    toast("Contact the portal owner to reset administrator access."),
+  );
+  $("#contactSupport")?.addEventListener("click", () =>
+    toast(
+      "Please contact your institution's portal administrator for support.",
+    ),
+  );
 }
 async function load() {
   if (!state.data && $("#app"))

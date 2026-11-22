@@ -997,6 +997,11 @@ async function route(req, res) {
     clearSession(res);
     return json(res, 200, { ok: true });
   }
+  if (method === "GET" && path === "/api/support/contact") {
+    const settings = await getSettings();
+    const phone = normalizeKenyanPhone(settings.support_phone);
+    return json(res, 200, { supportPhone: phone ? `+${phone}` : null });
+  }
   if (method === "GET" && path === "/api/me") {
     const [user, settings] = await Promise.all([
       currentUser(req),

@@ -431,7 +431,7 @@ test("PDF receipts use a branded visual hierarchy while retaining payment proven
     );
 });
 
-test("WhatsApp support settings normalize Kenyan mobile contacts and link directly to the admin", async () => {
+test("configured WhatsApp support is safely available to signed-out users", async () => {
   const [api, app] = await Promise.all([
     readFile(new URL("api/index.js", root), "utf8"),
     readFile(new URL("public/app.js", root), "utf8"),
@@ -443,14 +443,33 @@ test("WhatsApp support settings normalize Kenyan mobile contacts and link direct
       'if (method === "POST" && path === "/api/admin/requests/status")',
       settingsStart,
     ),
-    settingsRoute = api.slice(settingsStart, settingsEnd);
+    supportStart = api.indexOf(
+      'if (method === "GET" && path === "/api/support/contact")',
+    ),
+    supportEnd = api.indexOf(
+      'if (method === "GET" && path === "/api/me")',
+      supportStart,
+    ),
+    settingsRoute = api.slice(settingsStart, settingsEnd),
+    supportRoute = api.slice(supportStart, supportEnd);
   assert.ok(settingsStart >= 0 && settingsEnd > settingsStart);
   assert.match(settingsRoute, /normalizeKenyanPhone\(rawPhone\)/);
   assert.match(settingsRoute, /support_phone: phone/);
+  assert.ok(supportStart >= 0 && supportEnd > supportStart);
+  assert.match(supportRoute, /const settings = await getSettings\(\)/);
+  assert.match(supportRoute, /normalizeKenyanPhone\(settings\.support_phone\)/);
+  assert.match(supportRoute, /supportPhone: phone \? `\+\$\{phone\}` : null/);
+  assert.doesNotMatch(
+    supportRoute,
+    /paper_price|daraja|secret|username|password/i,
+  );
   assert.match(app, /function normalizeKenyanWhatsApp\(value\)/);
-  assert.match(app, /254\[17\]\\d\{8\}/);
+  assert.match(app, /api\("\/api\/support\/contact"\)/);
+  assert.match(app, /anchor\.href = `https:\/\/wa\.me\/\$\{number\}\?text=/);
+  assert.match(app, /anchor\.target = "_blank"/);
+  assert.match(app, /anchor\.rel = "noopener noreferrer"/);
+  assert.match(app, /button\.replaceWith\(anchor\)/);
   assert.match(app, /https:\/\/wa\.me\/\$\{number\}/);
-  assert.match(app, /aria-label[\s\S]*WhatsApp/);
 });
 
 test("transaction rows identify the learner and exact service without borrowing an admin username", async () => {
@@ -485,8 +504,8 @@ test("initial rainbow loading is accessible, honors reduced motion, and dashboar
   assert.match(app, /Could not refresh portal data/);
 });
 
-test("admin-selectable welcome designs preserve existing sign-in behavior and expose only the public preference", async () => {
-  const [api, app, css, schema, migration, image] = await Promise.all([
+test("CDACC welcome recreates the reference with live accessible auth panels and preserves existing routes", async () => {
+  const [api, app, css, schema, migration] = await Promise.all([
     readFile(new URL("api/index.js", root), "utf8"),
     readFile(new URL("public/app.js", root), "utf8"),
     readFile(new URL("public/style.css", root), "utf8"),
@@ -498,7 +517,6 @@ test("admin-selectable welcome designs preserve existing sign-in behavior and ex
       ),
       "utf8",
     ),
-    readFile(new URL("public/images/cdacc-exam-portal-welcome.jpg", root)),
   ]);
   const meStart = api.indexOf('if (method === "GET" && path === "/api/me")'),
     meEnd = api.indexOf(
@@ -528,50 +546,113 @@ test("admin-selectable welcome designs preserve existing sign-in behavior and ex
   );
   assert.match(settingsRoute, /login_design:\s*loginDesign/);
 
-  assert.match(app, /name="loginDesign"/);
-  assert.match(app, /label for="loginDesign"/);
-  assert.match(app, /select id="loginDesign" name="loginDesign"/);
+  for (const text of [
+    "Students Login",
+    "Access your exams and results",
+    "Admin Login",
+    "Manage the portal",
+    "Registration Number",
+    "Forgot Password?",
+    "New Student?",
+    "Register Here",
+    "Username",
+    "Contact Support",
+    "Book",
+    "Exams",
+    "Take Your",
+    "View",
+    "Results",
+    "Secure &amp; Reliable",
+    "Platform",
+    "CDACC – Empowering Skills for a Better Future",
+    "Your Skills,",
+    "Our Priority",
+    "EXAMINATION PORTAL",
+    "ASSESSMENT AND CERTIFICATION",
+    "DEVELOPMENT CENTRE",
+  ])
+    assert.ok(app.includes(text), `welcome contains reference detail: ${text}`);
+
+  assert.match(app, /name=\\?"loginDesign\\?"/);
+  assert.match(app, /label for=\\?"loginDesign\\?"/);
+  assert.match(app, /select id=\\?"loginDesign\\?" name=\\?"loginDesign\\?"/);
   assert.match(app, /state\.loginDesign = x\.loginDesign \|\| "cdacc"/);
   assert.match(app, /state\.loginDesign = x\.settings\?\.loginDesign/);
   assert.match(
     app,
-    /state\.mode === "register" \? "\/api\/register" : "\/api\/login"/,
+    /mode === "register" \? "\/api\/register" : "\/api\/login"/,
   );
-  assert.match(app, /Username or email/);
-  assert.match(app, /name="password" type="password"/);
-  assert.match(app, /Administrator access/);
-  for (const [field, label] of [
-    ["username", "Username"],
-    ["name", "Full name"],
-    ["email", "Email address"],
-    ["phone", "Phone number"],
-    ["identifier", "Username or email"],
-    ["password", "Password"],
-  ]) {
-    assert.match(app, new RegExp(`for="auth-${field}"[^>]*>${label}<`));
-    assert.match(app, new RegExp(`id="auth-${field}" name="${field}"`));
-  }
+  assert.match(app, /new URLSearchParams\(|new FormData\(e\.currentTarget\)/);
+  assert.match(app, /await load\(\)/);
+  assert.match(app, /name=\\?"identifier\\?"/);
+  assert.match(app, /id=\\?"adminAuthForm\\?"/);
+  assert.match(app, /id=\\?"authForm\\?"/);
+  assert.match(app, /name=\\?"password\\?" type=\\?"password\\?"/);
+  assert.match(app, /aria-pressed=\\?"\$\{admin\}\\?"/);
+  assert.match(app, /data-password-toggle=\\?"\$\{id\}\\?"/);
   assert.match(
     app,
-    /class="auth-background-image" src="\/images\/cdacc-exam-portal-welcome\.jpg" alt="" aria-hidden="true"/,
+    /Use your portal username or email if your registration number is not your username\./,
   );
+  assert.match(app, /username or email/);
+  assert.match(app, /Administrator access/);
 
-  for (const design of ["cdacc", "classic", "navy"])
-    assert.match(css, new RegExp(`\\.auth-theme-${design}`));
-  assert.match(css, /\.auth-theme-cdacc \.auth-background-image/);
+  for (const [field, label] of [
+    ["student-identifier", "Registration Number"],
+    ["admin-identifier", "Username"],
+    ["student-username", "Username"],
+    ["student-name", "Full name"],
+    ["student-email", "Email address"],
+    ["student-phone", "Phone number"],
+  ]) {
+    assert.match(
+      app,
+      new RegExp(`for=\\\\?"${field}\\\\?"`),
+      `label association for ${field}`,
+    );
+    assert.match(
+      app,
+      new RegExp(`id=\\\\?"${field}\\\\?"`),
+      `live input for ${field}`,
+    );
+  }
+  assert.match(app, /aria-labelledby=\\?"studentsLoginTitle\\?"/);
+  assert.match(app, /aria-labelledby=\\?"adminLoginTitle\\?"/);
+  assert.match(app, /studentForgot/);
+  assert.match(app, /adminForgot/);
+  assert.match(app, /contactSupport/);
+  assert.match(app, /setAttribute\("role", "status"\)/);
+  assert.match(app, /setAttribute\("aria-live", "polite"\)/);
+
+  assert.doesNotMatch(
+    app,
+    /auth-background-image|cdacc-exam-portal-welcome\.jpg/,
+  );
+  assert.doesNotMatch(
+    css,
+    /auth-background-image|cdacc-exam-portal-welcome\.jpg/,
+  );
+  assert.match(css, /\.auth-theme-cdacc\s*\{/);
   assert.match(
     css,
-    /\.auth-theme-cdacc \.auth-card\s*\{[\s\S]*?background: rgba\(255, 255, 255, 0\.82\)/,
+    /\.cdacc-login-panels\s*\{[\s\S]*?grid-template-columns: repeat\(2/,
   );
-  assert.match(css, /auth-card \.field label,[\s\S]*?color: #35465d/);
+  assert.match(css, /\.cdacc-student-submit\s*\{[\s\S]*?background: #c45100/);
+  assert.match(css, /\.cdacc-admin-submit\s*\{[\s\S]*?background: #17458d/);
   assert.match(
     css,
-    /\.auth-theme-cdacc \.auth-card\s*\{[\s\S]*?z-index: 2;[\s\S]*?grid-column: 2;/,
+    /\.cdacc-feature-strip\s*\{[\s\S]*?grid-template-columns: repeat\(4/,
   );
   assert.match(
     css,
-    /@media \(max-width: 650px\)[\s\S]*?\.auth-theme-cdacc \.auth-card/,
+    /@media \(max-width: 720px\)[\s\S]*?\.cdacc-login-panels\s*\{[\s\S]*?grid-template-columns: minmax\(0, 1fr\)/,
   );
+  assert.match(
+    css,
+    /@media \(max-width: 720px\)[\s\S]*?\.cdacc-feature-strip\s*\{[\s\S]*?grid-template-columns: repeat\(2/,
+  );
+  assert.doesNotMatch(css, /url\([^)]*cdacc-exam-portal-welcome\.jpg/i);
+
   assert.match(schema, /login_design text not null default 'cdacc'/);
   assert.match(
     schema,
@@ -581,5 +662,4 @@ test("admin-selectable welcome designs preserve existing sign-in behavior and ex
     migration,
     /check \(login_design in \('cdacc', 'classic', 'navy'\)\)/,
   );
-  assert.deepEqual([...image.subarray(0, 2)], [0xff, 0xd8]);
 });
