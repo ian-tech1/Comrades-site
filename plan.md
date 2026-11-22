@@ -75,3 +75,51 @@ Three intentionally low-probability alternatives considered: a dense institution
 ## Constraints
 
 A live M-Pesa STK Push cannot be initiated or verified without actual Daraja credentials and an externally reachable deployed callback URL. Payment confirmation also relies on Safaricom’s asynchronous callback. Administrators must run the updated `supabase/schema.sql` in the selected Supabase project and add the documented environment variables in Vercel before production use.
+
+## 2026-11-22 — learner service, pricing, profile and account-recovery upgrade
+
+### Scope and implementation approach
+
+Keep the existing Vercel Functions + Supabase server-only service-role architecture and the existing Daraja STK/callback implementation. Add a separate supplementary/refer registration request record for failed exams, retain the existing private results-request workflow, and extend payment records with nullable references to academic service requests. Each academic request snapshots its configured fee when submitted; the server, not the browser, chooses the price and verifies owner, amount, payer phone and receipt before recording payment. Paper purchases keep their current request/payment behavior. Additive, idempotent Supabase SQL updates are required before deploying this code; do not write to the live database from this task.
+
+Add administrator-controlled prices for paper defaults, results requests, and supplementary/refer registrations under System Settings. Learners can view and pay each service request through the same M-Pesa flow, see payment/request status, and retry eligible failures. Admins can review and progress each service request. Payment success and service-status changes produce notifications and audit entries.
+
+Store learner profile photos in a dedicated Supabase Storage bucket. Generate user-scoped upload paths and short-lived signed upload URLs on the server, validate image bytes and size before accepting a profile photo, and show an avatar fallback when no image exists. Profile photo uploads use JPEG, PNG, or WebP, up to 3 MB.
+
+Forgotten-password recovery will be administrator-mediated: admins can generate a one-time temporary password from Manage Members; the learner must change it immediately after signing in. Resetting a password increments a session version to revoke older sessions and writes an audit event. No email-based reset is added because the repository has no configured email-delivery provider; the sign-in view will clearly direct learners to the administrator.
+
+### Additional advanced enhancements (25)
+
+1. A learner-facing supplementary/refer registration form for failed exams, matching the existing results workflow's visual treatment.
+2. Capture institution, registration/admission identifiers, failed units, exam period and optional learner notes.
+3. Restrict each learner's refer-request list and status lookup to their own records.
+4. Provide a clear refer-request lifecycle: requested, processing, registered or rejected.
+5. Add a dedicated administrator queue with learner identity and refer-request details.
+6. Add separate administrator prices for papers, results requests and refer registrations.
+7. Snapshot each service fee at request creation so later price edits do not change existing requests.
+8. Display the applicable fee and payment state beside each learner service request.
+9. Reuse server-side Daraja STK checkout for results and refer services.
+10. Validate service-request ownership on every payment attempt.
+11. Prevent duplicate active STK prompts for the same service request.
+12. Allow eligible failed service payments to be retried without duplicating the request.
+13. Require a verified callback with matching amount, phone and unique receipt before marking an academic service paid.
+14. Preserve service-specific receipts in payment history and the admin export.
+15. Allow an administrator to record a verified manual M-Pesa receipt against an academic service request.
+16. Notify administrators when a learner submits a paid academic service request.
+17. Notify learners when a service payment is confirmed or its processing status changes.
+18. Apply server-side validation, duplicate-submission protection and per-user rate limits to academic service requests.
+19. Allow learners to upload a profile photo through a server-issued, user-scoped signed upload URL.
+20. Restrict profile images to JPEG/PNG/WebP and 3 MB, verifying stored bytes and size server-side.
+21. Replace the prior avatar only after the new one is verified and clean up the previous object.
+22. Show learner photos in the application header and profile editor, with initials fallback and upload preview.
+23. Add a clear forgotten-password recovery message on the sign-in screen.
+24. Let admins generate a one-time temporary learner password and require the learner to set a new password at next sign-in.
+25. Revoke old sessions and audit administrator password resets and profile-photo changes.
+
+### Design and project structure
+
+Reuse the current premium academic command-center style: keep the navy rail, bright teal/blue action palette, card surfaces and compact status pills. Reorganize learner task entry around clearly named service sections, improve mobile navigation and make form/payment states more visible. Preserve the current static frontend structure (`public/index.html`, `public/app.js`, `public/style.css`), the canonical API in `api/index.js`, helper tests in `tests/`, and the additive schema in `supabase/schema.sql`; update `README.md`, `DEPLOYMENT.md`, and `TODO.md` with the migration and operational requirements.
+
+### Material constraints
+
+No email provider, live Supabase credentials, or live Daraja credentials are supplied in this checkout. The code and migration can be prepared and tested locally; production readiness requires applying the full schema in the correct Supabase project and deploying the updated repository. Do not trigger a live M-Pesa payment or claim that the remote database is migrated.

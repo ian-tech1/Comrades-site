@@ -10,6 +10,7 @@ import {
   normalizeUsername,
   validateResultsRequest,
 } from "./results.js";
+import { detectAvatarMime, validateReferRequest } from "./service-requests.js";
 export const config = { api: { bodyParser: false }, maxDuration: 30 };
 const _clean = (v) =>
     typeof v === "string"
@@ -53,6 +54,7 @@ const supabase = createClient(
   env.SUPABASE_SERVICE_ROLE_KEY || "placeholder",
 );
 const BUCKET = env.SUPABASE_STORAGE_BUCKET || "papers",
+  AVATAR_BUCKET = "avatars",
   now = () => new Date().toISOString();
 const ALLOWED_EXTENSIONS = [
   ".pdf",
@@ -120,7 +122,12 @@ const b64 = (x) => Buffer.from(x).toString("base64url"),
       .digest("base64url");
 function setSession(res, u) {
   const p = b64(
-    JSON.stringify({ id: u.id, role: u.role, exp: Date.now() + 604800000 }),
+    JSON.stringify({
+      id: u.id,
+      role: u.role,
+      sessionVersion: Number(u.session_version || 0),
+      exp: Date.now() + 604800000,
+    }),
   );
   res.setHeader(
     "Set-Cookie",
@@ -150,6 +157,10 @@ const safeUser = (u) => ({
   email: u.email,
   phone: u.phone || "",
   role: u.role,
+  avatarUrl: u.avatar_path
+    ? `/api/profile/avatar?userId=${encodeURIComponent(u.id)}`
+    : "",
+  mustChangePassword: Boolean(u.must_change_password),
   createdAt: u.created_at,
 });
 async function currentUser(req) {
@@ -157,16 +168,36 @@ async function currentUser(req) {
   if (!s) return null;
   const { data, error } = await db
     .from("profiles")
-    .select("id,name,username,email,phone,role,created_at")
+    .select(
+      "id,name,username,email,phone,role,avatar_path,must_change_password,session_version,created_at",
+    )
     .eq("id", s.id)
     .maybeSingle();
   if (error) throw error;
-  return data ? safeUser(data) : null;
+  if (
+    !data ||
+    Number(data.session_version || 0) !== Number(s.sessionVersion || 0)
+  )
+    return null;
+  return safeUser(data);
 }
 async function requireUser(req, res, role) {
   const u = await currentUser(req);
   if (!u || (role && u.role !== role)) {
     fail(res, 401, "Please sign in with an authorized account.");
+    return null;
+  }
+  const path = _reqPath(req);
+  if (
+    u.mustChangePassword &&
+    ![
+      "/api/dashboard",
+      "/api/me",
+      "/api/profile/password",
+      "/api/logout",
+    ].includes(path)
+  ) {
+    fail(res, 403, "Change your temporary password before using the portal.");
     return null;
   }
   return u;
@@ -232,6 +263,10 @@ async function getSettings() {
       portal_name: "Comreds Papers Portal",
       currency: "KES",
       paper_price: Number(env.DEFAULT_PAPER_PRICE || 50),
+      results_request_price: Number(env.DEFAULT_RESULTS_REQUEST_PRICE || 0),
+      refer_registration_price: Number(
+        env.DEFAULT_REFER_REGISTRATION_PRICE || 0,
+      ),
       support_phone: env.DEFAULT_PAYMENT_PHONE || "+254723278526",
     })
     .select()
@@ -278,6 +313,13 @@ const mapPaper = (p) => ({
     paidAmount: Number(p.paid_amount || 0),
     resultCode: p.result_code,
     error: p.error_message || "",
+    serviceType: p.result_request_id
+      ? "results"
+      : p.refer_request_id
+        ? "refer"
+        : "paper",
+    resultRequestId: p.result_request_id || "",
+    referRequestId: p.refer_request_id || "",
   }),
   mapNotice = (n) => ({
     id: n.id,
@@ -301,12 +343,73 @@ const mapPaper = (p) => ({
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     uploadedAt: r.uploaded_at || null,
+    serviceFee: Number(r.service_fee || 0),
+    paymentStatus: r.payment_status || "paid",
   });
+const mapReferRequest = (r) => ({
+  id: r.id,
+  userId: r.user_id,
+  institutionName: r.institution_name,
+  registrationNumber: r.registration_number,
+  admissionNumber: r.admission_number,
+  failedUnits: Array.isArray(r.failed_units) ? r.failed_units : [],
+  examPeriod: r.exam_period,
+  notes: r.notes || "",
+  status: r.status,
+  paymentStatus: r.payment_status,
+  serviceFee: Number(r.service_fee || 0),
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});
 async function notifyAdmins(title, body, type = "payment") {
   const { data } = await db.from("profiles").select("id").eq("role", "admin");
   for (const a of data || []) await notify(a.id, title, body, type);
 }
 async function markPaid(pay, receipt, amount) {
+  if (!pay.request_id) {
+    const service = pay.result_request_id
+      ? {
+          table: "result_requests",
+          id: pay.result_request_id,
+          label: "results",
+        }
+      : pay.refer_request_id
+        ? {
+            table: "refer_requests",
+            id: pay.refer_request_id,
+            label: "refer registration",
+          }
+        : null;
+    if (!service) return;
+    const { data: request, error } = await db
+      .from(service.table)
+      .update({ payment_status: "paid", updated_at: now() })
+      .eq("id", service.id)
+      .neq("payment_status", "paid")
+      .select("id,user_id,institution_name,registration_number")
+      .maybeSingle();
+    if (error) throw error;
+    if (request) {
+      await notify(
+        request.user_id,
+        "Service payment confirmed",
+        `Your ${service.label} service request is paid. The administrator can now process it. Receipt: ${receipt || "pending"}.`,
+        "payment",
+      );
+      await notifyAdmins(
+        "Academic service paid",
+        `A ${service.label} request (${String(request.id).slice(0, 8)}) has been paid: KSh ${amount}, receipt ${receipt || "pending"}.`,
+      );
+      await db.from("audit_logs").insert({
+        actor_id: null,
+        action: "service.payment.confirmed",
+        entity_type: service.table,
+        entity_id: request.id,
+        metadata: { paymentId: pay.id, serviceType: service.label, receipt },
+      });
+    }
+    return;
+  }
   const { data: r } = await db
     .from("paper_requests")
     .update({ status: "paid" })
@@ -568,6 +671,8 @@ async function route(req, res) {
         "paid_phone",
         "phone",
         "receipt",
+        "refer_request_id",
+        "result_request_id",
         "request_id",
         "result_code",
         "result_description",
@@ -579,17 +684,22 @@ async function route(req, res) {
         "id",
         "paper_price",
         "portal_name",
+        "refer_registration_price",
+        "results_request_price",
         "support_phone",
       ],
       profiles: [
+        "avatar_path",
         "created_at",
         "email",
         "id",
+        "must_change_password",
         "name",
         "password_hash",
         "password_salt",
         "phone",
         "role",
+        "session_version",
         "username",
       ],
       result_requests: [
@@ -602,10 +712,27 @@ async function route(req, res) {
         "result_file_name",
         "result_file_size",
         "result_storage_path",
+        "payment_status",
+        "service_fee",
         "status",
         "updated_at",
         "uploaded_at",
         "uploaded_by",
+        "user_id",
+      ],
+      refer_requests: [
+        "admission_number",
+        "created_at",
+        "exam_period",
+        "failed_units",
+        "id",
+        "institution_name",
+        "notes",
+        "payment_status",
+        "registration_number",
+        "service_fee",
+        "status",
+        "updated_at",
         "user_id",
       ],
     };
@@ -618,12 +745,38 @@ async function route(req, res) {
           x.error ? { table: names[i], error: x.error.message } : null,
         )
         .filter(Boolean),
-      { data: bucket, error: bErr } = await supabase.storage.getBucket(BUCKET);
-    return json(res, problems.length || !bucket ? 503 : 200, {
-      ok: !problems.length && !!bucket,
+      [
+        { data: bucket, error: bErr },
+        { data: avatarBucket, error: avatarError },
+      ] = await Promise.all([
+        supabase.storage.getBucket(BUCKET),
+        supabase.storage.getBucket(AVATAR_BUCKET),
+      ]);
+    const papersStorageReady = bucket?.public === false,
+      avatarStorageReady =
+        avatarBucket?.public === false &&
+        Number(avatarBucket.file_size_limit) === 3 * 1024 * 1024 &&
+        ["image/jpeg", "image/png", "image/webp"].every((mime) =>
+          (avatarBucket.allowed_mime_types || []).includes(mime),
+        ),
+      storageReady = papersStorageReady && avatarStorageReady,
+      notReady = problems.length || !storageReady;
+    return json(res, notReady ? 503 : 200, {
+      ok: !notReady,
       database: "Supabase",
-      storage: !!bucket,
-      storageError: bErr ? bErr.message : undefined,
+      storage: storageReady,
+      papersStorageReady,
+      avatarStorageReady,
+      storageError: bErr
+        ? bErr.message
+        : !papersStorageReady
+          ? "The papers bucket must exist and remain private."
+          : undefined,
+      avatarStorageError: avatarError
+        ? avatarError.message
+        : !avatarStorageReady
+          ? "The avatars bucket must be private with a 3 MB limit and JPEG/PNG/WebP MIME types."
+          : undefined,
       bucket: BUCKET,
       daraja: {
         environment: env.DARAJA_ENV || "sandbox",
@@ -638,7 +791,7 @@ async function route(req, res) {
       hint: problems.length
         ? "Run supabase/schema.sql in the Supabase SQL Editor, then run: notify pgrst, 'reload schema';"
         : undefined,
-      version: "3.0.0",
+      version: "4.0.0",
     });
   }
   if (method === "POST" && path === "/api/register") {
@@ -751,46 +904,65 @@ async function route(req, res) {
   if (method === "GET" && path === "/api/dashboard") {
     const u = await requireUser(req, res);
     if (!u) return;
-    const [s, rr, pp, pa, nn, uu, nt, ff, resultRows] = await Promise.all([
-      getSettings(),
-      db
-        .from("paper_requests")
-        .select("*")
-        .order("created_at", { ascending: false }),
-      db.from("papers").select("*").order("created_at", { ascending: false }),
-      db.from("payments").select("*").order("created_at", { ascending: false }),
-      db
-        .from("notices")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(50),
-      u.role === "admin"
-        ? db
-            .from("profiles")
-            .select("id,name,username,email,phone,role,created_at")
-            .order("created_at", { ascending: false })
-        : Promise.resolve({ data: [], error: null }),
-      db
-        .from("notifications")
-        .select("*")
-        .eq("user_id", u.id)
-        .order("created_at", { ascending: false })
-        .limit(30),
-      db.from("favorites").select("paper_id").eq("user_id", u.id),
-      u.role === "admin"
-        ? db
-            .from("result_requests")
-            .select("*")
-            .order("created_at", { ascending: false })
-            .limit(500)
-        : db
-            .from("result_requests")
-            .select("*")
-            .eq("user_id", u.id)
-            .order("created_at", { ascending: false })
-            .limit(100),
-    ]);
-    for (const x of [rr, pp, pa, nn, uu, nt, ff, resultRows])
+    if (u.mustChangePassword) return json(res, 200, { user: u });
+    const [s, rr, pp, pa, nn, uu, nt, ff, resultRows, referRows] =
+      await Promise.all([
+        getSettings(),
+        db
+          .from("paper_requests")
+          .select("*")
+          .order("created_at", { ascending: false }),
+        db.from("papers").select("*").order("created_at", { ascending: false }),
+        db
+          .from("payments")
+          .select("*")
+          .order("created_at", { ascending: false }),
+        db
+          .from("notices")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(50),
+        u.role === "admin"
+          ? db
+              .from("profiles")
+              .select(
+                "id,name,username,email,phone,role,avatar_path,must_change_password,created_at",
+              )
+              .order("created_at", { ascending: false })
+          : Promise.resolve({ data: [], error: null }),
+        db
+          .from("notifications")
+          .select("*")
+          .eq("user_id", u.id)
+          .order("created_at", { ascending: false })
+          .limit(30),
+        db.from("favorites").select("paper_id").eq("user_id", u.id),
+        u.role === "admin"
+          ? db
+              .from("result_requests")
+              .select("*")
+              .order("created_at", { ascending: false })
+              .limit(500)
+          : db
+              .from("result_requests")
+              .select("*")
+              .eq("user_id", u.id)
+              .order("created_at", { ascending: false })
+              .limit(100),
+        u.role === "admin"
+          ? db
+              .from("refer_requests")
+              .select("*")
+              .order("created_at", { ascending: false })
+              .limit(500)
+          : db
+              .from("refer_requests")
+              .select("*")
+              .eq("user_id", u.id)
+              .order("created_at", { ascending: false })
+              .limit(100),
+      ]);
+    for (const x of [rr, pp, pa, nn, uu, nt, ff, resultRows, referRows])
       if (x.error && x.error.code !== "42P01") throw x.error;
     const requests = (rr.data || []).filter(
         (x) => u.role === "admin" || x.user_id === u.id,
@@ -808,10 +980,13 @@ async function route(req, res) {
       notifications: nt.data || [],
       favorites: (ff.data || []).map((x) => x.paper_id),
       resultRequests: (resultRows.data || []).map(mapResultRequest),
+      referRequests: (referRows.data || []).map(mapReferRequest),
       settings: {
         portalName: s.portal_name,
         currency: s.currency,
         paperPrice: s.paper_price,
+        resultsRequestPrice: s.results_request_price,
+        referRegistrationPrice: s.refer_registration_price,
         supportPhone: s.support_phone,
       },
     });
@@ -839,6 +1014,30 @@ async function route(req, res) {
     } catch (error) {
       return fail(res, 400, error.message);
     }
+    const settings = await getSettings(),
+      serviceFee = Number(settings.results_request_price || 0);
+    if (serviceFee < 1)
+      return fail(
+        res,
+        409,
+        "Results requests are not available until an administrator sets the service price.",
+      );
+    const { data: activeRequest, error: activeError } = await db
+      .from("result_requests")
+      .select("id")
+      .eq("user_id", u.id)
+      .eq("institution_name", details.institutionName)
+      .eq("registration_number", details.registrationNumber)
+      .eq("admission_number", details.admissionNumber)
+      .in("status", ["requested", "processing"])
+      .limit(1);
+    if (activeError) throw activeError;
+    if (activeRequest?.length)
+      return fail(
+        res,
+        409,
+        "A results request for these details is already active. Pay or follow the existing request instead.",
+      );
     const { data, error } = await db
       .from("result_requests")
       .insert({
@@ -848,16 +1047,110 @@ async function route(req, res) {
         admission_number: details.admissionNumber,
         registered_units: details.registeredUnits,
         status: "requested",
+        service_fee: serviceFee,
+        payment_status: "pending",
       })
       .select("*")
       .single();
+    if (error?.code === "23505")
+      return fail(
+        res,
+        409,
+        "A results request for these details is already active. Pay or follow the existing request instead.",
+      );
     if (error) throw error;
     await notifyAdmins(
       "New results request",
-      `A student submitted an academic results request (reference ${data.id.slice(0, 8)}).`,
+      `A student submitted an academic results request (reference ${data.id.slice(0, 8)}). Fee: KSh ${serviceFee}.`,
       "results",
     );
     return json(res, 201, { resultRequest: mapResultRequest(data) });
+  }
+  if (method === "POST" && path === "/api/refer/requests") {
+    const u = await requireUser(req, res, "student");
+    if (!u) return;
+    const since = new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      recent = await db
+        .from("refer_requests")
+        .select("id")
+        .eq("user_id", u.id)
+        .gte("created_at", since)
+        .limit(5);
+    if (recent.error) throw recent.error;
+    if ((recent.data || []).length >= 5)
+      return fail(
+        res,
+        429,
+        "Too many refer requests. Try again in 10 minutes.",
+      );
+    let details;
+    try {
+      details = validateReferRequest(await bodyJson(req));
+    } catch (error) {
+      return fail(res, 400, error.message);
+    }
+    const settings = await getSettings(),
+      serviceFee = Number(settings.refer_registration_price || 0);
+    if (serviceFee < 1)
+      return fail(
+        res,
+        409,
+        "Refer registration is not available until an administrator sets the service price.",
+      );
+    const { data: duplicate, error: duplicateError } = await db
+      .from("refer_requests")
+      .select("id")
+      .eq("user_id", u.id)
+      .eq("institution_name", details.institutionName)
+      .eq("registration_number", details.registrationNumber)
+      .eq("admission_number", details.admissionNumber)
+      .eq("exam_period", details.examPeriod)
+      .in("payment_status", ["pending", "paid"])
+      .in("status", ["requested", "processing"])
+      .limit(1);
+    if (duplicateError) throw duplicateError;
+    if (duplicate?.length)
+      return fail(
+        res,
+        409,
+        "A refer-registration request for these details is already active.",
+      );
+    const { data, error } = await db
+      .from("refer_requests")
+      .insert({
+        user_id: u.id,
+        institution_name: details.institutionName,
+        registration_number: details.registrationNumber,
+        admission_number: details.admissionNumber,
+        failed_units: details.failedUnits,
+        exam_period: details.examPeriod,
+        notes: details.notes,
+        status: "requested",
+        payment_status: "pending",
+        service_fee: serviceFee,
+      })
+      .select("*")
+      .single();
+    if (error?.code === "23505")
+      return fail(
+        res,
+        409,
+        "A refer-registration request for these details is already active.",
+      );
+    if (error) throw error;
+    await notifyAdmins(
+      "New refer-registration request",
+      `A learner submitted a failed-exam registration request (reference ${data.id.slice(0, 8)}). Fee: KSh ${serviceFee}.`,
+      "refer",
+    );
+    await db.from("audit_logs").insert({
+      actor_id: u.id,
+      action: "refer_request.create",
+      entity_type: "refer_request",
+      entity_id: data.id,
+      metadata: { serviceFee },
+    });
+    return json(res, 201, { referRequest: mapReferRequest(data) });
   }
   if (method === "POST" && path === "/api/results/check") {
     const u = await requireUser(req, res, "student");
@@ -902,6 +1195,19 @@ async function route(req, res) {
       status = String(b.status || "");
     if (!id || !["requested", "processing", "rejected"].includes(status))
       return fail(res, 400, "Choose a valid results-request status.");
+    const { data: existing, error: existingError } = await db
+      .from("result_requests")
+      .select("id,user_id,payment_status,status")
+      .eq("id", id)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (!existing) return fail(res, 404, "Results request not found.");
+    if (status === "processing" && existing.payment_status !== "paid")
+      return fail(
+        res,
+        409,
+        "The learner must pay the results-service fee first.",
+      );
     const { data, error } = await db
       .from("result_requests")
       .update({ status, updated_at: now() })
@@ -911,7 +1217,73 @@ async function route(req, res) {
       .maybeSingle();
     if (error) throw error;
     if (!data) return fail(res, 404, "Open results request not found.");
+    if (existing.status !== status)
+      await notify(
+        data.user_id,
+        "Results request updated",
+        `Your academic results request is now ${status.replaceAll("_", " ")}.`,
+        "results",
+      );
+    await db.from("audit_logs").insert({
+      actor_id: u.id,
+      action: "results.status",
+      entity_type: "result_request",
+      entity_id: data.id,
+      metadata: { status },
+    });
     return json(res, 200, { resultRequest: mapResultRequest(data) });
+  }
+  if (method === "POST" && path === "/api/admin/refer/status") {
+    const u = await requireUser(req, res, "admin");
+    if (!u) return;
+    const b = await bodyJson(req),
+      id = String(b.id || ""),
+      status = String(b.status || "");
+    if (
+      !id ||
+      !["requested", "processing", "registered", "rejected"].includes(status)
+    )
+      return fail(res, 400, "Choose a valid refer-request status.");
+    const { data: existing, error: existingError } = await db
+      .from("refer_requests")
+      .select("id,user_id,payment_status,status")
+      .eq("id", id)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (!existing)
+      return fail(res, 404, "Refer-registration request not found.");
+    if (
+      ["processing", "registered"].includes(status) &&
+      existing.payment_status !== "paid"
+    )
+      return fail(
+        res,
+        409,
+        "The learner must pay the refer-registration fee first.",
+      );
+    const { data, error } = await db
+      .from("refer_requests")
+      .update({ status, updated_at: now() })
+      .eq("id", id)
+      .select("*")
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return fail(res, 404, "Refer-registration request not found.");
+    if (existing.status !== status)
+      await notify(
+        data.user_id,
+        "Refer registration updated",
+        `Your failed-exam registration request is now ${status}.`,
+        "refer",
+      );
+    await db.from("audit_logs").insert({
+      actor_id: u.id,
+      action: "refer_request.status",
+      entity_type: "refer_request",
+      entity_id: data.id,
+      metadata: { status },
+    });
+    return json(res, 200, { referRequest: mapReferRequest(data) });
   }
   if (method === "POST" && path === "/api/admin/results/upload-url") {
     const u = await requireUser(req, res, "admin");
@@ -979,11 +1351,17 @@ async function route(req, res) {
       );
     const { data: request, error: requestError } = await db
       .from("result_requests")
-      .select("id,user_id,result_storage_path")
+      .select("id,user_id,result_storage_path,payment_status")
       .eq("id", id)
       .maybeSingle();
     if (requestError) throw requestError;
     if (!request) return fail(res, 404, "Results request not found.");
+    if (request.payment_status !== "paid")
+      return fail(
+        res,
+        409,
+        "The results-service fee must be paid before uploading results.",
+      );
     const { data: objects, error: listError } = await supabase.storage
       .from(BUCKET)
       .list(`results/${id}`, { search: parts[2] });
@@ -1160,19 +1538,57 @@ async function route(req, res) {
     const u = await requireUser(req, res);
     if (!u) return;
     const b = await bodyJson(req),
-      { data: r } = await db
-        .from("paper_requests")
-        .select("*")
-        .eq("id", b.requestId)
-        .eq("user_id", u.id)
-        .maybeSingle();
+      serviceType = String(b.serviceType || "paper"),
+      referenceField =
+        serviceType === "results"
+          ? "result_request_id"
+          : serviceType === "refer"
+            ? "refer_request_id"
+            : "request_id",
+      table =
+        serviceType === "results"
+          ? "result_requests"
+          : serviceType === "refer"
+            ? "refer_requests"
+            : "paper_requests";
+    if (!["paper", "results", "refer"].includes(serviceType))
+      return fail(res, 400, "Choose a valid service request.");
+    const { data: r, error: requestError } = await db
+      .from(table)
+      .select("*")
+      .eq("id", b.requestId)
+      .eq("user_id", u.id)
+      .maybeSingle();
+    if (requestError) throw requestError;
     if (!r) return fail(res, 404, "Request not found.");
-    if (r.status === "paid")
-      return fail(res, 409, "This request is already paid.");
+    const paid =
+        serviceType === "paper"
+          ? r.status === "paid"
+          : r.payment_status === "paid",
+      amount =
+        serviceType === "paper" ? Number(r.amount) : Number(r.service_fee);
+    if (paid) return fail(res, 409, "This request is already paid.");
+    if (serviceType !== "paper" && r.status === "rejected")
+      return fail(res, 409, "Rejected service requests cannot be paid.");
+    if (serviceType !== "paper") {
+      const { data: confirmedPayment, error: confirmedError } = await db
+        .from("payments")
+        .select("id")
+        .eq(referenceField, r.id)
+        .eq("status", "success")
+        .limit(1);
+      if (confirmedError) throw confirmedError;
+      if (confirmedPayment?.length)
+        return fail(
+          res,
+          409,
+          "A confirmed payment already exists for this request.",
+        );
+    }
     await db
       .from("payments")
       .update({ status: "failed", error_message: "Timed out" })
-      .eq("request_id", r.id)
+      .eq(referenceField, r.id)
       .in("status", ["initiated", "pending"])
       .lt("created_at", new Date(Date.now() - 180000).toISOString());
     const recent = await db
@@ -1189,7 +1605,7 @@ async function route(req, res) {
     const active = await db
       .from("payments")
       .select("id")
-      .eq("request_id", r.id)
+      .eq(referenceField, r.id)
       .in("status", ["initiated", "pending"])
       .limit(1);
     if (active.data?.length)
@@ -1213,17 +1629,23 @@ async function route(req, res) {
     const { data: pay, error } = await db
       .from("payments")
       .insert({
-        request_id: r.id,
+        [referenceField]: r.id,
         user_id: u.id,
-        amount: Math.round(Number(r.amount)),
+        amount: Math.round(amount),
         phone: msisdn,
         status: "initiated",
       })
       .select("*")
       .single();
+    if (error?.code === "23505")
+      return fail(
+        res,
+        409,
+        "A payment prompt is already pending for this request.",
+      );
     if (error) throw error;
     try {
-      const stk = await startSTK(msisdn, r.amount, r.id),
+      const stk = await startSTK(msisdn, amount, r.id),
         { error: e } = await db
           .from("payments")
           .update({
@@ -1307,6 +1729,9 @@ async function route(req, res) {
       console.error(
         "Rejected M-Pesa receipt already assigned to another payment.",
       );
+      console.error(
+        "Payment confirmation conflicted with an existing receipt or service payment.",
+      );
       return json(res, 200, { ResultCode: 0, ResultDesc: "Accepted" });
     }
     if (updateError) throw updateError;
@@ -1317,18 +1742,107 @@ async function route(req, res) {
           "M-Pesa code received",
           `Code ${items.MpesaReceiptNumber} for KSh ${items.Amount} (order ${String(pay.request_id).slice(0, 8)})`,
         );
-    } else if (!valid && updatedPayment)
-      await db
-        .from("paper_requests")
-        .update({ status: "payment_failed" })
-        .eq("id", pay.request_id)
-        .neq("status", "paid");
+    } else if (!valid && updatedPayment) {
+      if (pay.request_id)
+        await db
+          .from("paper_requests")
+          .update({ status: "payment_failed" })
+          .eq("id", pay.request_id)
+          .neq("status", "paid");
+      else if (pay.result_request_id)
+        await db
+          .from("result_requests")
+          .update({ payment_status: "failed", updated_at: now() })
+          .eq("id", pay.result_request_id)
+          .neq("payment_status", "paid");
+      else if (pay.refer_request_id)
+        await db
+          .from("refer_requests")
+          .update({ payment_status: "failed", updated_at: now() })
+          .eq("id", pay.refer_request_id)
+          .neq("payment_status", "paid");
+    }
     return json(res, 200, { ResultCode: 0, ResultDesc: "Accepted" });
   }
   if (method === "GET" && path.startsWith("/api/payments/status/")) {
     const u = await requireUser(req, res);
     if (!u) return;
     const id = path.split("/").pop();
+    const serviceType = new URL(
+      req.url,
+      "https://vercel.local",
+    ).searchParams.get("serviceType");
+    if (["results", "refer"].includes(serviceType)) {
+      const serviceField =
+          serviceType === "results" ? "result_request_id" : "refer_request_id",
+        table =
+          serviceType === "results" ? "result_requests" : "refer_requests";
+      let { data: serviceRequest, error: serviceError } = await db
+        .from(table)
+        .select("id,user_id,payment_status,service_fee")
+        .eq("id", id)
+        .maybeSingle();
+      if (serviceError) throw serviceError;
+      if (
+        !serviceRequest ||
+        (u.role !== "admin" && serviceRequest.user_id !== u.id)
+      )
+        return fail(res, 404, "Service request not found.");
+      if (serviceRequest.payment_status !== "paid") {
+        const { data: servicePayment } = await db
+          .from("payments")
+          .select("*")
+          .eq(serviceField, id)
+          .in("status", ["initiated", "pending"])
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (
+          servicePayment?.checkout_request_id &&
+          Date.now() - new Date(servicePayment.created_at) > 10000
+        ) {
+          try {
+            const query = await queryStk(servicePayment.checkout_request_id);
+            if (
+              query.ResultCode !== undefined &&
+              query.ResultCode !== null &&
+              query.ResultCode !== ""
+            )
+              await db
+                .from("payments")
+                .update({
+                  result_code: Number(query.ResultCode),
+                  result_description:
+                    query.ResultDesc ||
+                    "Daraja query returned; awaiting authenticated callback details.",
+                })
+                .eq("id", servicePayment.id)
+                .in("status", ["initiated", "pending"]);
+          } catch (e) {
+            console.error("STK service query", e && e.message);
+          }
+        }
+        ({ data: serviceRequest } = await db
+          .from(table)
+          .select("id,user_id,payment_status,service_fee")
+          .eq("id", id)
+          .maybeSingle());
+      }
+      const { data: serviceReceipt } = await db
+        .from("payments")
+        .select("receipt,amount")
+        .eq(serviceField, id)
+        .eq("status", "success")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      return json(res, 200, {
+        status: serviceRequest.payment_status,
+        serviceType,
+        receipt: serviceReceipt?.receipt || null,
+        amount: Number(serviceReceipt?.amount || serviceRequest.service_fee),
+      });
+    }
     let { data: r } = await db
       .from("paper_requests")
       .select("*")
@@ -1457,6 +1971,107 @@ async function route(req, res) {
       metadata: { title: p.title },
     });
     return json(res, 200, { deleted: true });
+  }
+  if (method === "POST" && path === "/api/admin/payments/service-manual") {
+    const u = await requireUser(req, res, "admin");
+    if (!u) return;
+    const b = await bodyJson(req),
+      serviceType = String(b.serviceType || ""),
+      table = serviceType === "results" ? "result_requests" : "refer_requests",
+      referenceField =
+        serviceType === "results" ? "result_request_id" : "refer_request_id",
+      code = String(b.receipt || "")
+        .trim()
+        .toUpperCase(),
+      amount = Number(b.amount),
+      phone = String(b.phone || "")
+        .replace(/\D/g, "")
+        .replace(/^0/, "254");
+    if (!["results", "refer"].includes(serviceType))
+      return fail(res, 400, "Choose a valid academic service.");
+    if (!/^[A-Z0-9]{8,12}$/.test(code))
+      return fail(res, 400, "Enter the M-Pesa code, for example UJV570GU3H.");
+    if (!Number.isInteger(amount) || amount < 1)
+      return fail(
+        res,
+        400,
+        "Enter the M-Pesa amount shown in the transaction.",
+      );
+    if (!/^254\d{9}$/.test(phone))
+      return fail(
+        res,
+        400,
+        "Enter the Kenyan phone number shown in the transaction.",
+      );
+    const { data: request, error: requestError } = await db
+      .from(table)
+      .select("id,user_id,payment_status,service_fee,status")
+      .eq("id", b.requestId)
+      .maybeSingle();
+    if (requestError) throw requestError;
+    if (!request) return fail(res, 404, "Service request not found.");
+    if (request.status === "rejected")
+      return fail(res, 409, "Rejected service requests cannot be paid.");
+    if (request.payment_status === "paid")
+      return fail(res, 409, "Already paid.");
+    const { data: confirmedPayment, error: confirmedError } = await db
+      .from("payments")
+      .select("id")
+      .eq(referenceField, request.id)
+      .eq("status", "success")
+      .limit(1);
+    if (confirmedError) throw confirmedError;
+    if (confirmedPayment?.length)
+      return fail(
+        res,
+        409,
+        "A confirmed payment already exists for this request.",
+      );
+    if (amount !== Number(request.service_fee))
+      return fail(
+        res,
+        409,
+        "The recorded M-Pesa amount must exactly match this service fee.",
+      );
+    const { data: duplicate, error: duplicateError } = await db
+      .from("payments")
+      .select("id")
+      .eq("receipt", code)
+      .limit(1);
+    if (duplicateError) throw duplicateError;
+    if (duplicate?.length)
+      return fail(res, 409, "That M-Pesa code was already used.");
+    const payment = {
+        [referenceField]: request.id,
+        user_id: request.user_id,
+        amount,
+        phone,
+        status: "success",
+        receipt: code,
+        paid_phone: phone,
+        paid_amount: amount,
+      },
+      { data: inserted, error } = await db
+        .from("payments")
+        .insert(payment)
+        .select("*")
+        .single();
+    if (error?.code === "23505")
+      return fail(
+        res,
+        409,
+        "That M-Pesa code was already used or this request already has a confirmed payment.",
+      );
+    if (error) throw error;
+    await markPaid(inserted, code, payment.amount);
+    await db.from("audit_logs").insert({
+      actor_id: u.id,
+      action: "service.payment.manual",
+      entity_type: table,
+      entity_id: request.id,
+      metadata: { paymentId: inserted.id, serviceType, receipt: code, amount },
+    });
+    return json(res, 200, { ok: true });
   }
   if (method === "POST" && path === "/api/admin/payments/manual") {
     const u = await requireUser(req, res, "admin");
@@ -1802,6 +2417,133 @@ async function route(req, res) {
     if (error && error.code !== "42P01") throw error;
     return json(res, 200, { notifications: data || [] });
   }
+  if (method === "GET" && path === "/api/profile/avatar") {
+    const u = await requireUser(req, res);
+    if (!u) return;
+    const userId = new URL(req.url, "https://vercel.local").searchParams.get(
+      "userId",
+    );
+    if (!userId || (u.role !== "admin" && userId !== u.id))
+      return fail(res, 404, "Profile photo not found.");
+    const { data: profile, error } = await db
+      .from("profiles")
+      .select("avatar_path")
+      .eq("id", userId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!profile?.avatar_path || !profile.avatar_path.startsWith(`${userId}/`))
+      return fail(res, 404, "Profile photo not found.");
+    const { data: link, error: linkError } = await supabase.storage
+      .from(AVATAR_BUCKET)
+      .createSignedUrl(profile.avatar_path, 120);
+    if (linkError) throw linkError;
+    res.statusCode = 302;
+    res.setHeader("cache-control", "private, no-store");
+    res.setHeader("location", link.signedUrl);
+    return res.end();
+  }
+  if (method === "POST" && path === "/api/profile/avatar-upload-url") {
+    const u = await requireUser(req, res);
+    if (!u) return;
+    const b = await bodyJson(req),
+      mime = String(b.mime || "").toLowerCase(),
+      extByMime = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+      },
+      size = Number(b.size);
+    if (!extByMime[mime])
+      return fail(res, 400, "Choose a JPEG, PNG or WebP profile photo.");
+    if (!Number.isFinite(size) || size < 1 || size > 3 * 1024 * 1024)
+      return fail(res, 400, "Profile photos must be between 1 byte and 3 MB.");
+    const storagePath = `${u.id}/${crypto.randomUUID()}${extByMime[mime]}`,
+      { data, error } = await supabase.storage
+        .from(AVATAR_BUCKET)
+        .createSignedUploadUrl(storagePath, { upsert: false });
+    if (error) throw error;
+    return json(res, 200, {
+      storagePath,
+      uploadUrl: data.signedUrl || data.signedURL,
+      token: data.token,
+      contentType: mime,
+      expiresIn: 7200,
+    });
+  }
+  if (method === "POST" && path === "/api/profile/avatar-complete") {
+    const u = await requireUser(req, res);
+    if (!u) return;
+    const b = await bodyJson(req),
+      storagePath = String(b.storagePath || ""),
+      parts = storagePath.split("/"),
+      expectedSize = Number(b.size);
+    if (
+      parts.length !== 2 ||
+      parts[0] !== u.id ||
+      !/^[a-f0-9-]{36}\.(jpg|png|webp)$/i.test(parts[1]) ||
+      !Number.isFinite(expectedSize) ||
+      expectedSize < 1 ||
+      expectedSize > 3 * 1024 * 1024
+    )
+      return fail(res, 400, "Upload a valid profile photo first.");
+    const { data: objects, error: listError } = await supabase.storage
+      .from(AVATAR_BUCKET)
+      .list(parts[0], { search: parts[1] });
+    if (listError) throw listError;
+    if (!objects?.some((item) => item.name === parts[1]))
+      return fail(
+        res,
+        400,
+        "Storage did not confirm the profile photo upload.",
+      );
+    const { data: photo, error: downloadError } = await supabase.storage
+      .from(AVATAR_BUCKET)
+      .download(storagePath);
+    if (downloadError) throw downloadError;
+    const mime = detectAvatarMime(Buffer.from(await photo.arrayBuffer())),
+      expectedMime = parts[1].endsWith(".jpg")
+        ? "image/jpeg"
+        : parts[1].endsWith(".png")
+          ? "image/png"
+          : "image/webp";
+    if (photo.size !== expectedSize || mime !== expectedMime) {
+      await supabase.storage.from(AVATAR_BUCKET).remove([storagePath]);
+      return fail(
+        res,
+        400,
+        "The uploaded photo is not a valid supported image.",
+      );
+    }
+    const { data: previous, error: previousError } = await db
+      .from("profiles")
+      .select("avatar_path")
+      .eq("id", u.id)
+      .maybeSingle();
+    if (previousError) throw previousError;
+    const { data: profile, error } = await db
+      .from("profiles")
+      .update({ avatar_path: storagePath })
+      .eq("id", u.id)
+      .select(
+        "id,name,username,email,phone,role,avatar_path,must_change_password,created_at",
+      )
+      .single();
+    if (error) throw error;
+    if (
+      previous?.avatar_path &&
+      previous.avatar_path.startsWith(`${u.id}/`) &&
+      previous.avatar_path !== storagePath
+    )
+      await supabase.storage.from(AVATAR_BUCKET).remove([previous.avatar_path]);
+    await db.from("audit_logs").insert({
+      actor_id: u.id,
+      action: "profile.avatar_update",
+      entity_type: "profile",
+      entity_id: u.id,
+      metadata: { mime, size: photo.size },
+    });
+    return json(res, 200, { user: safeUser(profile) });
+  }
   if (method === "POST" && path === "/api/profile") {
     const u = await requireUser(req, res);
     if (!u) return;
@@ -1826,7 +2568,9 @@ async function route(req, res) {
       .from("profiles")
       .update(updates)
       .eq("id", u.id)
-      .select("id,name,username,email,phone,role,created_at")
+      .select(
+        "id,name,username,email,phone,role,avatar_path,must_change_password,created_at",
+      )
       .single();
     if (error?.code === "23505")
       return fail(res, 409, "That username is already in use.");
@@ -1838,12 +2582,17 @@ async function route(req, res) {
     if (!u) return;
     const b = await bodyJson(req),
       currentPassword = String(b.currentPassword || ""),
-      newPassword = String(b.newPassword || "");
+      newPassword = String(b.newPassword || ""),
+      confirmPassword = String(b.confirmPassword || "");
     if (newPassword.length < 12)
       return fail(res, 400, "New passwords must be at least 12 characters.");
+    if (confirmPassword && newPassword !== confirmPassword)
+      return fail(res, 400, "The new passwords do not match.");
     const { data: account, error: readError } = await db
       .from("profiles")
-      .select("password_salt,password_hash")
+      .select(
+        "password_salt,password_hash,session_version,must_change_password",
+      )
       .eq("id", u.id)
       .maybeSingle();
     if (readError) throw readError;
@@ -1855,16 +2604,23 @@ async function route(req, res) {
         account.password_salt || "",
         64,
       );
-    if (
-      expected.length !== actual.length ||
-      !crypto.timingSafeEqual(actual, expected)
-    )
-      return fail(res, 401, "Current password is incorrect.");
+    if (!account.must_change_password) {
+      if (
+        expected.length !== actual.length ||
+        !crypto.timingSafeEqual(actual, expected)
+      )
+        return fail(res, 401, "Current password is incorrect.");
+    }
     const salt = crypto.randomBytes(16).toString("hex"),
       password_hash = crypto.scryptSync(newPassword, salt, 64).toString("hex"),
       { error } = await db
         .from("profiles")
-        .update({ password_salt: salt, password_hash })
+        .update({
+          password_salt: salt,
+          password_hash,
+          must_change_password: false,
+          session_version: Number(account.session_version || 0) + 1,
+        })
         .eq("id", u.id);
     if (error) throw error;
     await db.from("audit_logs").insert({
@@ -1872,10 +2628,48 @@ async function route(req, res) {
       action: "profile.password_change",
       entity_type: "profile",
       entity_id: u.id,
-      metadata: {},
+      metadata: { forcedChange: Boolean(account.must_change_password) },
     });
     clearSession(res);
     return json(res, 200, { ok: true });
+  }
+  if (method === "POST" && path === "/api/admin/users/reset-password") {
+    const u = await requireUser(req, res, "admin");
+    if (!u) return;
+    const b = await bodyJson(req),
+      targetId = String(b.userId || "");
+    if (!targetId) return fail(res, 400, "Choose a learner account.");
+    const { data: account, error: readError } = await db
+      .from("profiles")
+      .select("id,role,session_version")
+      .eq("id", targetId)
+      .maybeSingle();
+    if (readError) throw readError;
+    if (!account || account.role !== "student")
+      return fail(res, 404, "Learner account not found.");
+    const temporaryPassword = crypto.randomBytes(15).toString("base64url"),
+      salt = crypto.randomBytes(16).toString("hex"),
+      password_hash = crypto
+        .scryptSync(temporaryPassword, salt, 64)
+        .toString("hex"),
+      { error } = await db
+        .from("profiles")
+        .update({
+          password_salt: salt,
+          password_hash,
+          must_change_password: true,
+          session_version: Number(account.session_version || 0) + 1,
+        })
+        .eq("id", targetId);
+    if (error) throw error;
+    await db.from("audit_logs").insert({
+      actor_id: u.id,
+      action: "admin.password_reset",
+      entity_type: "profile",
+      entity_id: targetId,
+      metadata: { forcedChange: true },
+    });
+    return json(res, 200, { temporaryPassword });
   }
   if (method === "GET" && path === "/api/admin/analytics") {
     const u = await requireUser(req, res, "admin");
@@ -1917,24 +2711,38 @@ async function route(req, res) {
       "content-disposition",
       "attachment; filename=comreds-payments.csv",
     );
+    const csvCell = (value) => {
+      const text = String(value ?? ""),
+        safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+      return '"' + safe.replaceAll('"', '""') + '"';
+    };
     res.end(
       [
-        "id,request_id,amount,phone,status,receipt,created_at",
-        (data || [])
-          .map((x) =>
-            [
-              x.id,
-              x.request_id,
-              x.amount,
-              x.phone,
-              x.status,
-              x.receipt || "",
-              x.created_at,
-            ]
-              .map((v) => '"' + String(v).replaceAll('"', '""') + '"')
-              .join(","),
-          )
-          .join("\n"),
+        "id,service_type,request_id,result_request_id,refer_request_id,amount,paid_amount,phone,paid_phone,status,receipt,result_code,result_description,created_at",
+        ...(data || []).map((x) =>
+          [
+            x.id,
+            x.result_request_id
+              ? "results"
+              : x.refer_request_id
+                ? "refer"
+                : "paper",
+            x.request_id || "",
+            x.result_request_id || "",
+            x.refer_request_id || "",
+            x.amount,
+            x.paid_amount ?? "",
+            x.phone,
+            x.paid_phone || "",
+            x.status,
+            x.receipt || "",
+            x.result_code ?? "",
+            x.result_description || "",
+            x.created_at,
+          ]
+            .map(csvCell)
+            .join(","),
+        ),
       ].join("\n"),
     );
     return;
@@ -2015,13 +2823,32 @@ async function route(req, res) {
       );
     if (phone && !/^\+?254\d{9}$/.test(phone) && !/^07\d{8}$/.test(phone))
       return fail(res, 400, "Enter a valid Kenyan M-Pesa number.");
+    const prices = {
+      paper_price: Number(b.paperPrice ?? s.paper_price),
+      results_request_price: Number(
+        b.resultsRequestPrice ?? s.results_request_price ?? 0,
+      ),
+      refer_registration_price: Number(
+        b.referRegistrationPrice ?? s.refer_registration_price ?? 0,
+      ),
+    };
+    if (
+      Object.values(prices).some(
+        (price) => !Number.isInteger(price) || price < 0 || price > 1000000,
+      )
+    )
+      return fail(
+        res,
+        400,
+        "Prices must be whole-shilling amounts from KSh 0 to 1,000,000.",
+      );
     const { data, error } = await db
       .from("portal_settings")
       .upsert({
         id: 1,
         portal_name: String(b.portalName || s.portal_name).slice(0, 80),
         currency: "KES",
-        paper_price: Math.max(0, Number(b.paperPrice ?? s.paper_price)),
+        ...prices,
         support_phone: phone,
       })
       .select()

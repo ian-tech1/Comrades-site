@@ -1,6 +1,6 @@
 # Comreds Papers Portal
 
-A responsive revision-paper portal with learner and administrator accounts, Supabase-backed catalog/storage, protected downloads, and an optional Daraja (M-Pesa) payment flow. The repository is configured for Vercel Functions and static assets.
+A responsive revision-paper portal with learner and administrator accounts, paid results and supplementary/refer registration requests, profile photos, Supabase-backed catalog/storage, protected downloads, and a Daraja (M-Pesa) payment flow. The repository is configured for Vercel Functions and static assets.
 
 ## Project structure
 
@@ -14,7 +14,7 @@ A responsive revision-paper portal with learner and administrator accounts, Supa
 
 ## Quick start
 
-1. Run the complete `supabase/schema.sql` in the SQL Editor of the Supabase project you plan to use. Confirm the private `papers` bucket is present.
+1. Run the complete `supabase/schema.sql` in the SQL Editor of the Supabase project you plan to use. Confirm the private `papers` bucket is present. The migration also creates a private `avatars` bucket for learner profile photos, served only through authenticated short-lived signed URLs; do not make either bucket public.
 2. Configure the environment variables in Vercel as described in [DEPLOYMENT.md](DEPLOYMENT.md). Keep Supabase and Daraja credentials in server-side environment variables only.
 3. Deploy the repository root to Vercel with Node.js 22 or later. The build command is `npm run build`; it runs syntax, regression, and formatting checks.
 4. Visit `/api/health`. A successful response reports `ok: true`, `database: "Supabase"`, and `storage: true`.
@@ -36,3 +36,9 @@ Daraja callback requests include a high-entropy `DARAJA_CALLBACK_TOKEN` in the c
 - Do not set `DATABASE_URL` or `NEON_DATABASE_URL`; this version uses Supabase APIs only.
 - Set production payment credentials only in the Vercel Production environment. Avoid live credentials in Preview deployments.
 - See [DEPLOYMENT.md](DEPLOYMENT.md) for environment variables, Vercel project settings, health checks, and smoke-test steps.
+
+## Academic services and password recovery
+
+Learners submit results requests under **Request Results** and failed/supplementary exam registration requests under **Refer Registration**. Each request saves the service fee configured at submission and must be paid before staff can process it. M-Pesa confirmation relies on the same authenticated callback and amount/phone/receipt validation as paper purchases. Admins review requests under **Results Requests** and **Refer Requests** and can record a verified manual M-Pesa receipt. Learners can add a JPEG, PNG or WebP photo up to 3 MB in **My Profile**; the API verifies the stored bytes before attaching it.
+
+Forgotten-password recovery is administrator-mediated. An administrator can issue a one-time temporary password from **Manage Members**. Existing sessions are revoked, and the learner is required to choose a new password at sign-in. Share temporary passwords privately; the portal does not send password-reset email.

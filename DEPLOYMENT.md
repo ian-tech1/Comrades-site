@@ -3,7 +3,7 @@
 ## 1. Prepare Supabase
 
 1. Open the Supabase project that will back this deployment.
-2. In **SQL Editor**, run the complete `supabase/schema.sql` from this repository. Do not run only selected sections; the API readiness check requires the tables and columns in the full schema, including `login_events`. The latest schema also adds usernames and the private academic-results request workflow; rerunning it is safe for those additive objects.
+2. In **SQL Editor**, run the complete `supabase/schema.sql` from this repository after the preflight checks below. The API readiness check requires all tables and columns in the full schema, including `login_events`. The latest schema also adds priced academic results and refer-registration services, service-linked payment references, learner profile-photo storage, and forced password-reset/session fields. Rerunning it is safe for these additive objects.
 
 Before applying this migration to an existing portal, check for duplicate receipt codes:
 
@@ -15,9 +15,39 @@ group by receipt
 having count(*) > 1;
 ```
 
-Resolve any returned duplicates before running the full schema; it creates a unique index so one M-Pesa receipt cannot confirm multiple payments.
+Resolve any returned receipt duplicates before migration. The v16.4 migration introduces `refer_requests` and the academic-service payment reference columns, so their preflight queries cannot run on an untouched v16.3 database. For an existing v16.3 portal, first execute only the v16.4 setup statements in `supabase/schema.sql`—from the `v16.4 priced academic services` comment through `create index if not exists refer_requests_status_created_idx`, stopping before the first new `create unique index`. This stage is idempotent and creates the tables/columns needed for preflight; it does not add the new partial unique indexes. Then run these checks and reconcile any returned rows before running the complete schema:
 
-3. Confirm the `papers` Storage bucket exists and remains **private**. The migration configures a 25 MB object limit and accepted document MIME types.
+```sql
+select user_id, lower(btrim(institution_name)), lower(btrim(registration_number)), lower(btrim(admission_number)), count(*)
+from public.result_requests
+where status in ('requested', 'processing')
+group by 1,2,3,4 having count(*) > 1;
+
+select user_id, lower(btrim(institution_name)), lower(btrim(registration_number)), lower(btrim(admission_number)), lower(btrim(exam_period)), count(*)
+from public.refer_requests
+where status in ('requested', 'processing')
+group by 1,2,3,4,5 having count(*) > 1;
+
+select request_id, count(*) from public.payments
+where request_id is not null and status in ('initiated', 'pending')
+group by request_id having count(*) > 1;
+select result_request_id, count(*) from public.payments
+where result_request_id is not null and status in ('initiated', 'pending')
+group by result_request_id having count(*) > 1;
+select refer_request_id, count(*) from public.payments
+where refer_request_id is not null and status in ('initiated', 'pending')
+group by refer_request_id having count(*) > 1;
+select result_request_id, count(*) from public.payments
+where result_request_id is not null and status = 'success'
+group by result_request_id having count(*) > 1;
+select refer_request_id, count(*) from public.payments
+where refer_request_id is not null and status = 'success'
+group by refer_request_id having count(*) > 1;
+```
+
+The partial indexes enforce one active prompt per request and one successful payment per academic request, including manual-payment/callback races. Review any rows returned; reconcile them without deleting payment records. For a brand-new empty Supabase project, run the complete schema directly; no preflight duplicates can exist.
+
+3. Confirm the `papers` Storage bucket exists and remains **private**. The migration configures a 25 MB object limit and accepted document MIME types. Confirm the `avatars` bucket is private with a 3 MB limit and JPEG/PNG/WebP MIME types; profile photos are served only through authenticated short-lived signed URLs. Never make either bucket public or put results PDFs in the avatar bucket.
 4. Copy the project URL from **Project Settings → Data API** (for example `https://PROJECT-REF.supabase.co`) and the server-side **Secret key** (`sb_secret_...`). Do not use a database connection string or publish the key.
 
 ## 2. Configure the Vercel project
@@ -56,7 +86,7 @@ In **Project → Settings → Environment Variables**, add these for Production 
 | `DARAJA_CALLBACK_URL`       | For STK           | Public HTTPS URL ending `/api/mpesa/callback`. The application appends the secret query token automatically. Set the stable Production domain, not a Preview URL. |
 | `DARAJA_CALLBACK_TOKEN`     | For STK           | Independent high-entropy secret of at least 32 characters, e.g. `openssl rand -hex 32`. Never place it in source code or logs.                                    |
 
-The complete placeholder template is `.env.example`. Do not configure `DATABASE_URL`, `NEON_DATABASE_URL`, or a raw Postgres connection string. The Publishable/anon Supabase key is not used by this server-only app.
+The complete placeholder template is `.env.example`. Do not configure `DATABASE_URL`, `NEON_DATABASE_URL`, or a raw Postgres connection string. The Publishable/anon Supabase key is not used by this server-only app. After the migration is applied and before inviting learners to use the new services, open **Admin → System Settings** and set the results-request and refer-registration prices. KSh 0 disables new requests for that service; each submitted request retains its fee snapshot.
 
 ## 4. Deploy and verify
 
@@ -68,7 +98,7 @@ The complete placeholder template is `.env.example`. Do not configure `DATABASE_
 
 ## Academic results workflow
 
-Students register with a username and can continue using their existing email credentials; sign-in accepts either the username or email. Existing students can set a username from **My Profile** without recreating their account. A student submits the institution name, registration number, admission number, and registered units in **Request Results**. The student can view only their own requests in **Check Results**. Admins review each request under **Results Requests**, move it through requested/processing/rejected, and upload a PDF to mark the request complete. Completed requests cannot be moved back to an open status, but their PDF can be replaced. The portal notifies the student in-app when results are uploaded.
+Students register with a username and can continue using their existing email credentials; sign-in accepts either the username or email. Existing students can set a username from **My Profile** without recreating their account. Learners can request academic results or supplementary/refer registration and must pay the displayed service fee for each request before admin processing. Refer requests capture institution, student identifiers, failed units and exam period; learners can only see their own requests. Admins manage refer requests under **Refer Requests** and may record a verified manual receipt when needed. Learners can upload a JPEG, PNG or WebP profile photo up to 3 MB; server-side byte verification is required before it is linked to the profile. A student submits the institution name, registration number, admission number, and registered units in **Request Results**. The student can view only their own requests in **Check Results**. Admins review each request under **Results Requests**, move it through requested/processing/rejected, and upload a PDF to mark the request complete. Completed requests cannot be moved back to an open status, but their PDF can be replaced. Results requests require payment before uploading results; the portal notifies the student in-app when results are uploaded. Refer requests support requested, processing, registered and rejected states, with payment required before processing/registration.
 
 Results PDFs are stored in the private `papers` bucket. RLS and a restrictive policy deny direct `anon`/`authenticated` table access; the server uses its private service key only after verifying the session and request owner/admin role. The download endpoint then returns a short-lived signed download URL. Do not make the bucket public or expose result storage paths in the client. After applying the schema, smoke-test that one student cannot see or download another student's result.
 
@@ -92,3 +122,7 @@ npm run build
 ```
 
 For local interaction, install the Vercel CLI and run `npm run dev`; configure local variables in an ignored `.env.local` file. Never add a real secret to `.env.example` or commit a local env file.
+
+## Forgotten-password recovery
+
+Password reset is administrator-mediated because no email-delivery provider is configured. From **Manage Members**, an admin can issue a one-time temporary password to a learner. The action revokes existing sessions, records an audit event without storing the password in the audit log, and forces the learner to set a new password on sign-in. Share the temporary password through a private channel. The login page instructs learners who forget their password to contact the administrator.

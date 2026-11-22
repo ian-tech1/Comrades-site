@@ -75,7 +75,7 @@ function status(s) {
 function authView() {
   const admin = state.mode === "admin";
   $("#app").innerHTML =
-    `<div class="auth"><section class="auth-intro"><div class="brand"><span class="brand-icon">🎓</span><div><strong>Comreds Papers Portal</strong><small>Learn · Prepare · Succeed</small></div></div><h1>Your revision journey starts here.</h1><p>Request, pay for and access learning materials from one secure student portal.</p></section><section class="auth-card"><h2>${state.mode === "register" ? "Create learner account" : admin ? "Administrator sign in" : "Welcome back"}</h2><p class="muted">${state.mode === "register" ? "Choose a username to sign in and add your contact details." : "Sign in with your username and password."}</p><form id="authForm">${state.mode === "register" ? `<div class="field"><label>Username</label><input name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,31}" autocomplete="username" placeholder="e.g. learner_01"></div><div class="field"><label>Full name</label><input name="name" required></div><div class="field"><label>Email address</label><input name="email" type="email" required autocomplete="email"></div><div class="field"><label>Phone number</label><input name="phone" placeholder="07XXXXXXXX"></div>` : `<div class="field"><label>Username or email</label><input name="identifier" required autocomplete="username" placeholder="Your username"></div>`}<div class="field"><label>Password</label><input name="password" type="password" minlength="8" required autocomplete="${state.mode === "register" ? "new-password" : "current-password"}"></div><button class="btn" style="width:100%">${state.mode === "register" ? "Create account" : "Sign in"}</button></form><p style="margin-top:18px">${!admin && state.mode !== "register" ? `New learner? <button class="link" id="register">Create account</button>` : ""}${state.mode === "register" ? `Already registered? <button class="link" id="login">Sign in</button>` : ""}</p><button class="link" id="adminLogin">Administrator access</button></section></div>`;
+    `<div class="auth"><section class="auth-intro"><div class="brand"><span class="brand-icon">🎓</span><div><strong>Comreds Papers Portal</strong><small>Learn · Prepare · Succeed</small></div></div><h1>Your revision journey starts here.</h1><p>Request, pay for and access learning materials from one secure student portal.</p></section><section class="auth-card"><h2>${state.mode === "register" ? "Create learner account" : admin ? "Administrator sign in" : "Welcome back"}</h2><p class="muted">${state.mode === "register" ? "Choose a username to sign in and add your contact details." : "Sign in with your username and password."}</p><form id="authForm">${state.mode === "register" ? `<div class="field"><label>Username</label><input name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,31}" autocomplete="username" placeholder="e.g. learner_01"></div><div class="field"><label>Full name</label><input name="name" required></div><div class="field"><label>Email address</label><input name="email" type="email" required autocomplete="email"></div><div class="field"><label>Phone number</label><input name="phone" placeholder="07XXXXXXXX"></div>` : `<div class="field"><label>Username or email</label><input name="identifier" required autocomplete="username" placeholder="Your username"></div>`}<div class="field"><label>Password</label><input name="password" type="password" minlength="8" required autocomplete="${state.mode === "register" ? "new-password" : "current-password"}"></div><button class="btn" style="width:100%">${state.mode === "register" ? "Create account" : "Sign in"}</button></form><p style="margin-top:18px">${!admin && state.mode !== "register" ? `New learner? <button class="link" id="register">Create account</button>` : ""}${state.mode === "register" ? `Already registered? <button class="link" id="login">Sign in</button>` : ""}</p>${!admin && state.mode !== "register" ? '<p class="recovery-note">Forgot your password? Contact the portal administrator to reset it. A temporary password will be issued and must be changed at your next sign-in.</p>' : ""}<button class="link" id="adminLogin">Administrator access</button></section></div>`;
   $("#authForm").onsubmit = async (e) => {
     e.preventDefault();
     const b = Object.fromEntries(new FormData(e.target));
@@ -119,37 +119,42 @@ function render() {
   const d = state.data,
     u = state.user,
     admin = u.role === "admin";
-  const nav = admin
-    ? [
-        "Dashboard",
-        "Manage Papers",
-        "Manage Members",
-        "Requests & Orders",
-        "Results Requests",
-        "Transactions",
-        "Payment Reports",
-        "Emergency Papers",
-        "System Settings",
-        "Security",
-      ]
-    : [
-        "Dashboard",
-        "Request Results",
-        "Check Results",
-        "Request Papers",
-        "My Papers",
-        "Payments",
-        "Transaction History",
-        "Emergency Papers",
-        "My Profile",
-        "Security",
-      ];
+  if (u.mustChangePassword) state.tab = "Security";
+  const nav = u.mustChangePassword
+    ? ["Security"]
+    : admin
+      ? [
+          "Dashboard",
+          "Manage Papers",
+          "Manage Members",
+          "Requests & Orders",
+          "Results Requests",
+          "Refer Requests",
+          "Transactions",
+          "Payment Reports",
+          "Emergency Papers",
+          "System Settings",
+          "Security",
+        ]
+      : [
+          "Dashboard",
+          "Request Results",
+          "Check Results",
+          "Refer Registration",
+          "Request Papers",
+          "My Papers",
+          "Payments",
+          "Transaction History",
+          "Emergency Papers",
+          "My Profile",
+          "Security",
+        ];
   const count = (arr, fn) => arr.filter(fn).length;
   const req = d.requests || [],
     pays = d.payments || [],
     papers = d.papers || [];
   $("#app").innerHTML =
-    `<div class="shell"><aside class="side" id="side"><div class="brand"><span class="brand-icon">🎓</span><div><strong>Comreds Papers Portal</strong><small>${admin ? "Admin Panel" : "Learn · Prepare · Succeed"}</small></div></div><nav class="nav">${nav.map((n) => `<button class="${state.tab === n ? "active" : ""}" data-tab="${n}">${{ Dashboard: "⌂", "Manage Papers": "▤", "Manage Members": "♙", "Requests & Orders": "▣", "Results Requests": "▧", "Request Results": "▤", "Check Results": "✓", Transactions: "▧", "Payment Reports": "▥", "Emergency Papers": "⚠", "System Settings": "⚙", "Request Papers": "▤", "My Papers": "▣", Payments: "▣", "Transaction History": "▤", "My Profile": "♙" }[n] || "•"} &nbsp; ${n}</button>`).join("")}</nav><div class="side-foot">“Small steps everyday lead to big results.”<br><br><button class="link" id="logout" style="color:white">↪ Log out</button></div></aside><main class="main"><header class="top"><button class="mobile-menu" id="menu">☰</button><input class="search" id="search" placeholder="⌕  Search for papers (e.g. Mathematics, Automotive...)"/><div class="top-tools"><button class="icon-btn" title="Notifications">♢<span class="notification-count">${(d.notifications || []).filter((n) => !n.read_at).length || ""}</span></button></div><div class="user"><div class="avatar">${esc(u.name[0]?.toUpperCase() || "C")}</div><div><b>${esc(u.name)}</b><br><small class="muted">${admin ? "Administrator" : "Student"}</small></div></div></header><section class="content" id="content">${pageContent(d, admin)}</section></main></div>`;
+    `<div class="shell"><aside class="side" id="side"><div class="brand"><span class="brand-icon">🎓</span><div><strong>Comreds Papers Portal</strong><small>${admin ? "Admin Panel" : "Learn · Prepare · Succeed"}</small></div></div><nav class="nav">${nav.map((n) => `<button class="${state.tab === n ? "active" : ""}" data-tab="${n}">${{ Dashboard: "⌂", "Manage Papers": "▤", "Manage Members": "♙", "Requests & Orders": "▣", "Results Requests": "▧", "Refer Requests": "↻", "Refer Registration": "↻", "Request Results": "▤", "Check Results": "✓", Transactions: "▧", "Payment Reports": "▥", "Emergency Papers": "⚠", "System Settings": "⚙", "Request Papers": "▤", "My Papers": "▣", Payments: "▣", "Transaction History": "▤", "My Profile": "♙" }[n] || "•"} &nbsp; ${n}</button>`).join("")}</nav><div class="side-foot">“Small steps everyday lead to big results.”<br><br><button class="link" id="logout" style="color:white">↪ Log out</button></div></aside><main class="main"><header class="top"><button class="mobile-menu" id="menu">☰</button><input class="search" id="search" placeholder="⌕  Search for papers (e.g. Mathematics, Automotive...)"/><div class="top-tools"><button class="icon-btn" title="Notifications">♢<span class="notification-count">${(d.notifications || []).filter((n) => !n.read_at).length || ""}</span></button></div><div class="user">${avatarMarkup(u, "header-avatar")}<div><b>${esc(u.name)}</b><br><small class="muted">${admin ? "Administrator" : "Student"}</small></div></div></header><section class="content" id="content">${pageContent(d, admin)}</section></main></div>`;
   document.querySelectorAll("[data-tab]").forEach(
     (b) =>
       (b.onclick = () => {
@@ -181,13 +186,16 @@ function pageContent(d, admin) {
     users = d.users || [],
     notices = d.notices || [],
     resultRequests = d.resultRequests || [],
+    referRequests = d.referRequests || [],
     paid = countSafe(req, (x) => x.status === "paid"),
     pending = countSafe(req, (x) =>
       ["requested", "awaiting_payment", "processing"].includes(x.status),
     );
   const title = state.tab;
   if (title === "Request Results")
-    return `<div class="welcome"><div><h1>Request Academic Results</h1><p class="muted">Send your institution and student details to the admin for processing.</p></div></div><div class="panel"><h2>Submit a results request</h2><p class="muted">Enter your institution, registration number, admission number and the units you registered. Your request is visible only to you and the portal admin.</p><form id="resultRequestForm" class="form-grid"><div class="field"><label>Institution name</label><input name="institutionName" maxlength="160" required placeholder="College or university"></div><div class="field"><label>Registration number</label><input name="registrationNumber" maxlength="80" required></div><div class="field"><label>Admission number</label><input name="admissionNumber" maxlength="80" required></div><div class="field full"><label>Registered units (one per line)</label><textarea name="registeredUnits" rows="5" maxlength="5000" required placeholder="MAT 101 — Calculus&#10;CSC 102 — Programming"></textarea></div><div class="full"><button class="btn">Submit results request</button></div></form></div><div class="panel"><h2>Your requests</h2><div class="table-wrap"><table><tr><th>Institution</th><th>Registration</th><th>Admission</th><th>Units</th><th>Status</th><th>Submitted</th></tr>${resultRequests.map((r) => `<tr><td>${esc(r.institutionName)}</td><td>${esc(r.registrationNumber)}</td><td>${esc(r.admissionNumber)}</td><td>${r.registeredUnits.map(esc).join(", ")}</td><td>${status(r.status)}</td><td>${new Date(r.createdAt).toLocaleDateString()}</td></tr>`).join("") || '<tr><td colspan="6" class="muted">You have not requested results yet.</td></tr>'}</table></div></div>`;
+    return `<div class="welcome"><div><h1>Request Academic Results</h1><p class="muted">Send your institution and student details to the admin for processing; pay the listed service fee for each request.</p></div></div><div class="panel service-intro"><div><span class="service-kicker">ACADEMIC RESULTS SERVICE</span><h2>Results request</h2><p class="muted">Requests are private to you and the portal administrator.</p></div><div class="service-price">${d.settings.resultsRequestPrice > 0 ? `KSh ${Number(d.settings.resultsRequestPrice).toLocaleString()} <small>per request</small>` : "<small>Price not configured yet</small>"}</div></div>${d.settings.resultsRequestPrice > 0 ? `<div class="panel"><h2>Submit a results request</h2><form id="resultRequestForm" class="form-grid"><div class="field"><label>Institution name</label><input name="institutionName" maxlength="160" required placeholder="College or university"></div><div class="field"><label>Registration number</label><input name="registrationNumber" maxlength="80" required></div><div class="field"><label>Admission number</label><input name="admissionNumber" maxlength="80" required></div><div class="field full"><label>Registered units (one per line)</label><textarea name="registeredUnits" rows="5" maxlength="5000" required placeholder="MAT 101 — Calculus&#10;CSC 102 — Programming"></textarea></div><div class="full"><button class="btn">Submit request · KSh ${Number(d.settings.resultsRequestPrice).toLocaleString()}</button></div></form></div>` : '<div class="panel muted">Results requests are temporarily unavailable. Please check again after an administrator publishes the service fee.</div>'}<div class="panel"><h2>Your requests</h2><div class="table-wrap"><table><tr><th>Institution</th><th>Registration</th><th>Admission</th><th>Units</th><th>Fee</th><th>Payment</th><th>Status</th><th>Submitted</th><th>Action</th></tr>${resultRequests.map((r) => `<tr><td>${esc(r.institutionName)}</td><td>${esc(r.registrationNumber)}</td><td>${esc(r.admissionNumber)}</td><td>${r.registeredUnits.map(esc).join(", ")}</td><td>KSh ${Number(r.serviceFee).toLocaleString()}</td><td>${status(r.paymentStatus)}</td><td>${status(r.status)}</td><td>${new Date(r.createdAt).toLocaleDateString()}</td><td>${r.status === "rejected" ? "Request rejected" : r.paymentStatus === "paid" ? "Paid" : `<button class="btn" data-service-pay="results" data-request-id="${esc(r.id)}">${r.paymentStatus === "failed" ? "Retry payment" : "Pay now"}</button>`}</td></tr>`).join("") || '<tr><td colspan="9" class="muted">You have not requested results yet.</td></tr>'}</table></div></div>`;
+  if (title === "Refer Registration" && !admin)
+    return `<div class="welcome"><div><h1>Register for Supplementary Exams</h1><p class="muted">Request registration for units you failed, then pay the published service fee.</p></div></div><div class="panel service-intro"><div><span class="service-kicker">FAILED-EXAM SERVICE</span><h2>Refer registration</h2><p class="muted">Enter the same institution and student identifiers used by your school. List each failed unit on a separate line.</p></div><div class="service-price">${d.settings.referRegistrationPrice > 0 ? `KSh ${Number(d.settings.referRegistrationPrice).toLocaleString()} <small>per request</small>` : "<small>Price not configured yet</small>"}</div></div>${d.settings.referRegistrationPrice > 0 ? `<div class="panel"><h2>Submit a refer request</h2><form id="referRequestForm" class="form-grid"><div class="field"><label>Institution name</label><input name="institutionName" maxlength="160" required placeholder="College or university"></div><div class="field"><label>Registration number</label><input name="registrationNumber" maxlength="80" required></div><div class="field"><label>Admission number</label><input name="admissionNumber" maxlength="80" required></div><div class="field"><label>Exam period</label><input name="examPeriod" maxlength="80" required placeholder="e.g. May–June 2026"></div><div class="field full"><label>Failed units (one per line)</label><textarea name="failedUnits" rows="5" maxlength="5000" required placeholder="MAT 101 — Calculus&#10;CSC 102 — Programming"></textarea><small class="muted">1–40 units, up to 120 characters each.</small></div><div class="field full"><label>Notes (optional)</label><textarea name="notes" rows="3" maxlength="1000" placeholder="Any useful context for the administrator"></textarea></div><div class="full"><button class="btn">Submit refer request · KSh ${Number(d.settings.referRegistrationPrice).toLocaleString()}</button></div></form></div>` : '<div class="panel muted">Refer registration is temporarily unavailable. Please check again after an administrator publishes the service fee.</div>'}<div class="panel"><h2>Your refer requests</h2><div class="table-wrap"><table><tr><th>Institution</th><th>Exam period</th><th>Failed units</th><th>Service fee</th><th>Payment</th><th>Request status</th><th>Date</th><th>Action</th></tr>${referRequests.map((r) => `<tr><td>${esc(r.institutionName)}</td><td>${esc(r.examPeriod)}</td><td>${r.failedUnits.map(esc).join(", ")}</td><td>KSh ${Number(r.serviceFee).toLocaleString()}</td><td>${status(r.paymentStatus)}</td><td>${status(r.status)}</td><td>${new Date(r.createdAt).toLocaleDateString()}</td><td>${r.status === "rejected" ? "Request rejected" : r.paymentStatus === "paid" ? (r.status === "registered" ? "Registered" : "Payment confirmed") : `<button class="btn" data-service-pay="refer" data-request-id="${esc(r.id)}">${r.paymentStatus === "failed" ? "Retry payment" : "Pay now"}</button>`}</td></tr>`).join("") || '<tr><td colspan="8" class="muted">No refer requests submitted yet.</td></tr>'}</table></div></div>`;
   if (title === "Check Results")
     return `<div class="welcome"><div><h1>Check Your Results</h1><p class="muted">Use the same institution, registration number and admission number you submitted with your request.</p></div></div><div class="panel"><form id="resultLookupForm" class="form-grid"><div class="field"><label>Institution name</label><input name="institution" required></div><div class="field"><label>Registration number</label><input name="registration" required></div><div class="field"><label>Admission number</label><input name="admission" required></div><div class="full"><button class="btn">Check results</button></div></form><div id="resultsLookup" aria-live="polite"></div></div><div class="panel"><h2>Your submitted results requests</h2><div class="table-wrap"><table><tr><th>Institution</th><th>Registration</th><th>Status</th><th>Updated</th><th>Results</th></tr>${resultRequests.map((r) => `<tr><td>${esc(r.institutionName)}</td><td>${esc(r.registrationNumber)}</td><td>${status(r.status)}</td><td>${new Date(r.updatedAt || r.createdAt).toLocaleDateString()}</td><td>${r.status === "completed" ? `<a class="btn" href="/api/results/download/${encodeURIComponent(r.id)}">Download PDF</a>` : "Not ready"}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No results requests found.</td></tr>'}</table></div></div>`;
   if (title === "Results Requests" && admin)
@@ -195,10 +203,20 @@ function pageContent(d, admin) {
       resultRequests
         .map((r) => {
           const student = users.find((x) => x.id === r.userId) || {};
-          return `<div class="panel result-request"><div class="panel-head"><h2>Request ${esc(r.id.slice(0, 8))}</h2>${status(r.status)}</div><p><b>Student:</b> ${esc(student.name || "Learner")} · ${esc(student.username || "")} · ${esc(student.email || "")}</p><p><b>Institution:</b> ${esc(r.institutionName)}</p><p><b>Registration number:</b> ${esc(r.registrationNumber)} &nbsp; <b>Admission number:</b> ${esc(r.admissionNumber)}</p><p><b>Registered units:</b> ${r.registeredUnits.map(esc).join(", ")}</p><p class="muted">Submitted ${new Date(r.createdAt).toLocaleString()}${r.resultFileName ? ` · Current file: ${esc(r.resultFileName)}` : ""}</p><div class="form-grid"><div class="field"><label>Request status</label><select data-result-status="${esc(r.id)}" ${r.status === "completed" ? "disabled" : ""}><option value="requested" ${r.status === "requested" ? "selected" : ""}>Requested</option><option value="processing" ${r.status === "processing" ? "selected" : ""}>Processing</option><option value="rejected" ${r.status === "rejected" ? "selected" : ""}>Rejected</option>${r.status === "completed" ? '<option value="completed" selected>Completed</option>' : ""}</select></div><form class="field result-upload-form" data-result-upload="${esc(r.id)}"><label>${r.resultFileName ? "Replace results PDF" : "Upload results PDF"}</label><input type="file" name="file" accept="application/pdf,.pdf" required><button class="btn" type="submit">${r.resultFileName ? "Replace PDF" : "Upload PDF and notify student"}</button></form></div></div>`;
+          return `<div class="panel result-request"><div class="panel-head"><h2>Request ${esc(r.id.slice(0, 8))}</h2>${status(r.status)}</div><p><b>Student:</b> ${esc(student.name || "Learner")} · ${esc(student.username || "")} · ${esc(student.email || "")}</p><p><b>Institution:</b> ${esc(r.institutionName)}</p><p><b>Registration number:</b> ${esc(r.registrationNumber)} &nbsp; <b>Admission number:</b> ${esc(r.admissionNumber)}</p><p><b>Registered units:</b> ${r.registeredUnits.map(esc).join(", ")}</p><p><b>Service fee:</b> KSh ${Number(r.serviceFee).toLocaleString()} · <b>Payment:</b> ${status(r.paymentStatus)}</p>${r.paymentStatus !== "paid" && r.status !== "rejected" ? `<button class="btn" data-service-manual="results" data-request-id="${esc(r.id)}">Record verified M-Pesa receipt</button>` : ""}<p class="muted">Submitted ${new Date(r.createdAt).toLocaleString()}${r.resultFileName ? ` · Current file: ${esc(r.resultFileName)}` : ""}</p><div class="form-grid"><div class="field"><label>Request status</label><select data-result-status="${esc(r.id)}" ${r.status === "completed" ? "disabled" : ""}><option value="requested" ${r.status === "requested" ? "selected" : ""}>Requested</option><option value="processing" ${r.status === "processing" ? "selected" : ""}>Processing</option><option value="rejected" ${r.status === "rejected" ? "selected" : ""}>Rejected</option>${r.status === "completed" ? '<option value="completed" selected>Completed</option>' : ""}</select></div><form class="field result-upload-form" data-result-upload="${esc(r.id)}"><label>${r.resultFileName ? "Replace results PDF" : "Upload results PDF"}</label><input type="file" name="file" accept="application/pdf,.pdf" required><button class="btn" type="submit">${r.resultFileName ? "Replace PDF" : "Upload PDF and notify student"}</button></form></div></div>`;
         })
         .join("") ||
       '<div class="panel muted">There are no academic results requests yet.</div>'
+    }`;
+  if (title === "Refer Requests" && admin)
+    return `<div class="welcome"><div><h1>Refer Registration Queue</h1><p class="muted">Review failed-exam registration requests and update their progress after payment.</p></div></div>${
+      referRequests
+        .map((r) => {
+          const student = users.find((x) => x.id === r.userId) || {};
+          return `<div class="panel result-request"><div class="panel-head"><h2>Request ${esc(r.id.slice(0, 8))}</h2>${status(r.status)}</div><p><b>Student:</b> ${esc(student.name || "Learner")} · ${esc(student.username || "")} · ${esc(student.email || "")}</p><p><b>Institution:</b> ${esc(r.institutionName)} · <b>Exam period:</b> ${esc(r.examPeriod)}</p><p><b>Registration:</b> ${esc(r.registrationNumber)} · <b>Admission:</b> ${esc(r.admissionNumber)}</p><p><b>Failed units:</b> ${r.failedUnits.map(esc).join(", ")}</p>${r.notes ? `<p><b>Notes:</b> ${esc(r.notes)}</p>` : ""}<p><b>Fee:</b> KSh ${Number(r.serviceFee).toLocaleString()} · <b>Payment:</b> ${status(r.paymentStatus)}</p><small class="muted">Submitted ${new Date(r.createdAt).toLocaleString()}</small><div class="row-actions"><label class="field"><span>Request status</span><select data-refer-status="${esc(r.id)}" ${r.paymentStatus !== "paid" ? "disabled" : ""}><option value="requested" ${r.status === "requested" ? "selected" : ""}>Requested</option><option value="processing" ${r.status === "processing" ? "selected" : ""}>Processing</option><option value="registered" ${r.status === "registered" ? "selected" : ""}>Registered</option><option value="rejected" ${r.status === "rejected" ? "selected" : ""}>Rejected</option></select></label>${r.paymentStatus !== "paid" && r.status !== "rejected" ? `<button class="btn" data-service-manual="refer" data-request-id="${esc(r.id)}">Record verified M-Pesa receipt</button>` : ""}</div></div>`;
+        })
+        .join("") ||
+      '<div class="panel muted">No refer-registration requests have been submitted.</div>'
     }`;
   if (title === "Manage Papers" || title === "Request Papers")
     return `<div class="welcome"><div><h1>${admin ? "Manage Papers" : "Request Revision Papers"}</h1><p class="muted">${admin ? "Upload, organize and publish learning materials." : "Browse available materials or submit a paper request."}</p></div></div>${!admin && title === "Request Papers" ? `<div class="panel request-panel"><h2>Can’t find your paper?</h2><p class="muted">Submit a request and we’ll notify you when matching material is published.</p><form id="requestForm" class="form-grid"><div class="field"><label>Paper title</label><input name="title" required placeholder="e.g. KCSE Mathematics 2023"></div><div class="field"><label>Subject</label><input name="subject" required placeholder="Mathematics"></div><div class="field"><label>Level / year</label><input name="level" placeholder="Form 4 / 2023"></div><div class="full"><button class="btn">Submit paper request</button></div></form></div>` : ""}${admin ? `<div class="panel"><h2>Upload a new paper</h2><form id="uploadForm" class="form-grid"><div class="field"><label>Paper title</label><input name="title" required></div><div class="field"><label>Subject</label><input name="subject" required placeholder="Mathematics, English..."></div><div class="field"><label>Paper type</label><select name="type"><option>Revision Paper</option><option>Past Paper</option><option>Marking Scheme</option><option>Notes</option></select></div><div class="field"><label>Price (KES)</label><input name="price" type="number" min="0" value="${d.settings.paperPrice}" required></div><div class="field"><label>Document (PDF, Word, Excel, PowerPoint, CSV, TXT, ODT/ODS/ODP, RTF)</label><input name="file" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt,.rtf,.odt,.ods,.odp" required></div><div class="field"><label>Description</label><input name="description"></div><div class="full"><button class="btn">Upload paper</button></div></form></div>` : ""}<div class="panel"><h2>Available papers</h2>${filterBar(papers)}<div class="paper-grid">${
@@ -207,9 +225,18 @@ function pageContent(d, admin) {
         .join("") || '<p class="muted">No papers published yet.</p>'
     }</div></div>`;
   if (title === "Manage Members")
-    return `<div class="welcome"><div><h1>Manage Members</h1><p class="muted">Registered learners and their accounts.</p></div></div><div class="panel"><div class="table-wrap"><table><tr><th>Name</th><th>Username</th><th>Email</th><th>Phone</th><th>Role</th><th>Joined</th></tr>${users.map((x) => `<tr><td>${esc(x.name)}</td><td>${esc(x.username || "—")}</td><td>${esc(x.email)}</td><td>${esc(x.phone)}</td><td>${esc(x.role)}</td><td>${new Date(x.createdAt).toLocaleDateString()}</td></tr>`).join("")}</table></div></div>`;
+    return `<div class="welcome"><div><h1>Manage Members</h1><p class="muted">Registered learners and their accounts.</p></div></div><div class="panel"><div class="table-wrap"><table><tr><th>Learner</th><th>Username</th><th>Email</th><th>Phone</th><th>Joined</th><th>Account access</th></tr>${
+      users
+        .filter((x) => x.role === "student")
+        .map(
+          (x) =>
+            `<tr><td><span class="member-cell">${avatarMarkup(x, "member-avatar")} ${esc(x.name)}</span></td><td>${esc(x.username || "—")}</td><td>${esc(x.email)}</td><td>${esc(x.phone || "—")}</td><td>${new Date(x.createdAt).toLocaleDateString()}</td><td><button class="btn" data-reset-password="${esc(x.id)}">Reset password</button></td></tr>`,
+        )
+        .join("") ||
+      '<tr><td colspan="6" class="muted">No learner accounts yet.</td></tr>'
+    }</table></div><p class="muted">A reset immediately signs out existing sessions and displays a temporary password once. The learner must set a new password at next sign-in; share the temporary password privately.</p></div>`;
   if (title === "System Settings")
-    return `<div class="welcome"><div><h1>System Settings</h1><p class="muted">Configure portal details and default paper pricing.</p></div></div><div class="panel"><form id="settingsForm"><div class="field"><label>Portal name</label><input name="portalName" value="${esc(d.settings.portalName)}"></div><div class="field"><label>Default paper price (KES)</label><input name="paperPrice" type="number" min="0" value="${d.settings.paperPrice}"></div><div class="field"><label>M-Pesa checkout default phone</label><input name="supportPhone" type="tel" placeholder="+2547XXXXXXXX" value="${esc(d.settings.supportPhone)}"></div><button class="btn">Save settings</button></form><p class="muted">This number is used as the default STK checkout phone when a learner has no saved phone. Learners can still enter a different number. Daraja API credentials are configured privately on the server using environment variables, not on this screen.</p></div>`;
+    return `<div class="welcome"><div><h1>System Settings</h1><p class="muted">Configure portal details and administrator-set service prices.</p></div></div><div class="panel"><form id="settingsForm" class="form-grid"><div class="field full"><label>Portal name</label><input name="portalName" value="${esc(d.settings.portalName)}"></div><div class="field"><label>Default paper price (KES)</label><input name="paperPrice" type="number" min="0" max="1000000" step="1" value="${d.settings.paperPrice}" required></div><div class="field"><label>Results request fee (KES)</label><input name="resultsRequestPrice" type="number" min="0" max="1000000" step="1" value="${Number(d.settings.resultsRequestPrice || 0)}" required></div><div class="field"><label>Failed-exam refer registration fee (KES)</label><input name="referRegistrationPrice" type="number" min="0" max="1000000" step="1" value="${Number(d.settings.referRegistrationPrice || 0)}" required></div><div class="field"><label>M-Pesa checkout default phone</label><input name="supportPhone" type="tel" placeholder="+2547XXXXXXXX" value="${esc(d.settings.supportPhone)}"></div><div class="full"><button class="btn">Save settings</button></div></form><p class="muted">Set either academic service fee to KSh 0 to temporarily disable new requests of that type. Existing requests keep their original price snapshot. Prices are whole Kenyan shillings. This number is used as the default STK checkout phone when a learner has no saved phone. Daraja credentials remain server-only.</p></div>`;
   if (title === "Emergency Papers")
     return `<div class="welcome"><div><h1>Emergency Papers & Notices</h1><p class="muted">Urgent revision materials and important updates.</p></div></div>${admin ? `<div class="panel"><h2>Publish notice</h2><form id="noticeForm"><div class="field"><label>Title</label><input name="title" required></div><div class="field"><label>Message</label><textarea name="body" required></textarea></div><button class="btn">Publish notice</button></form></div>` : ""}<div class="panel">${notices.map((n) => `<div class="notice"><b>📢 ${esc(n.title)}</b><div>${esc(n.body)}</div><small>${new Date(n.createdAt).toLocaleString()}</small></div>`).join("")}</div>`;
   if (title === "Requests & Orders" || title === "My Papers")
@@ -259,18 +286,28 @@ function pageContent(d, admin) {
               "",
             )}</select></div><div class="field"><label>M-Pesa code</label><input name="receipt" required placeholder="e.g. UJV570GU3H"></div><div class="full"><button class="btn">Confirm payment manually</button></div></form></div>`
         : ""
-    }<div class="panel"><div class="table-wrap"><table><tr><th>Date</th>${admin ? "<th>Student</th><th>Paper</th>" : ""}<th>Amount</th><th>Phone</th><th>Status</th><th>M-Pesa code</th></tr>${
+    }<div class="panel"><div class="table-wrap"><table><tr><th>Date</th>${admin ? "<th>Student</th>" : ""}<th>Service</th><th>Amount</th><th>Phone</th><th>Status</th><th>M-Pesa code</th></tr>${
       pays
         .map((x) => {
-          const q = req.find((r) => r.id === x.requestId) || {};
-          return `<tr><td>${new Date(x.createdAt).toLocaleString()}</td>${admin ? `<td>${esc(q.studentName || "—")}</td><td>${esc(q.title || "—")}</td>` : ""}<td>KSh ${x.amount}</td><td>${esc(x.phone)}</td><td>${status(x.status)}</td><td>${esc(x.receipt || "—")}${x.receipt ? ` <button class="icon" data-copy="${esc(x.receipt)}">Copy</button> <button class="icon" data-receipt="${x.id}">Print</button>` : ""}</td></tr>`;
+          const q = req.find((r) => r.id === x.requestId) || {},
+            learner =
+              (state.data.users || []).find((user) => user.id === x.userId) ||
+              {},
+            serviceName =
+              x.serviceType === "results"
+                ? "Academic results"
+                : x.serviceType === "refer"
+                  ? "Refer registration"
+                  : q.title || "Paper order",
+            serviceId = x.resultRequestId || x.referRequestId;
+          return `<tr><td>${new Date(x.createdAt).toLocaleString()}</td>${admin ? `<td>${esc(q.studentName || learner.name || "—")}</td>` : ""}<td>${esc(serviceName)}${serviceId ? `<small class="muted service-ref"> · ${esc(serviceId.slice(0, 8))}</small>` : ""}</td><td>KSh ${x.amount}</td><td>${esc(x.phone)}</td><td>${status(x.status)}</td><td>${esc(x.receipt || "—")}${x.receipt ? ` <button class="icon" data-copy="${esc(x.receipt)}">Copy</button> <button class="icon" data-receipt="${x.id}">Print</button>` : ""}</td></tr>`;
         })
         .join("") || '<tr><td colspan="7">No payments recorded.</td></tr>'
     }</table></div></div>`;
   if (title === "Security")
-    return `<div class="welcome"><div><h1>Account security</h1><p class="muted">Rotate your password; your current session will be signed out afterward.</p></div></div><div class="panel"><form id="passwordForm" class="form-grid"><div class="field"><label>Current password</label><input name="currentPassword" type="password" autocomplete="current-password" required></div><div class="field"><label>New password (12 characters minimum)</label><input name="newPassword" type="password" minlength="12" autocomplete="new-password" required></div><div class="full"><button class="btn">Change password</button></div></form></div>`;
+    return `<div class="welcome"><div><h1>${d.user.mustChangePassword ? "Set a new password" : "Account security"}</h1><p class="muted">${d.user.mustChangePassword ? "Your administrator issued a temporary password. Choose a new password to unlock the portal." : "Rotate your password; your current session will be signed out afterward."}</p></div></div><div class="panel"><form id="passwordForm" class="form-grid">${d.user.mustChangePassword ? "" : `<div class="field"><label>Current password</label><input name="currentPassword" type="password" autocomplete="current-password" required></div>`}<div class="field"><label>New password (12 characters minimum)</label><input name="newPassword" type="password" minlength="12" autocomplete="new-password" required></div><div class="field"><label>Confirm new password</label><input name="confirmPassword" type="password" minlength="12" autocomplete="new-password" required></div><div class="full"><button class="btn">${d.user.mustChangePassword ? "Set new password" : "Change password"}</button></div></form></div>`;
   if (title === "My Profile")
-    return `<div class="welcome"><div><h1>My Profile</h1><p class="muted">Your learner account information.</p></div></div><div class="panel"><form id="profileForm" class="form-grid"><div class="field"><label>Full name</label><input name="name" maxlength="100" required value="${esc(d.user.name)}"></div><div class="field"><label>Username</label><input name="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,31}" autocomplete="username" value="${esc(d.user.username || "")}" placeholder="Set a username for future sign-ins"></div><div class="field"><label>Email</label><input value="${esc(d.user.email)}" disabled></div><div class="field"><label>Phone</label><input name="phone" value="${esc(d.user.phone || "")}" placeholder="07XXXXXXXX"></div><div class="full"><button class="btn">Save profile</button></div></form><p class="muted">You can keep using your email or sign in with your username. Leave username blank to keep your current username.</p></div>`;
+    return `<div class="welcome"><div><h1>My Profile</h1><p class="muted">Your learner account information and profile photo.</p></div></div><div class="panel profile-panel"><div class="profile-photo">${avatarMarkup(d.user, "profile-avatar")}<div><h2>Profile photo</h2><p class="muted">JPEG, PNG or WebP, up to 3 MB.</p><label class="btn upload-label" for="avatarFile">Choose photo</label><input class="hidden" id="avatarFile" type="file" accept="image/jpeg,image/png,image/webp"><p id="avatarMessage" class="muted" aria-live="polite"></p></div></div></div><div class="panel"><form id="profileForm" class="form-grid"><div class="field"><label>Full name</label><input name="name" maxlength="100" required value="${esc(d.user.name)}"></div><div class="field"><label>Username</label><input name="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,31}" autocomplete="username" value="${esc(d.user.username || "")}" placeholder="Set a username for future sign-ins"></div><div class="field"><label>Email</label><input value="${esc(d.user.email)}" disabled></div><div class="field"><label>Phone</label><input name="phone" value="${esc(d.user.phone || "")}" placeholder="07XXXXXXXX"></div><div class="full"><button class="btn">Save profile</button></div></form><p class="muted">You can keep using your email or sign in with your username. Leave username blank to keep your current username.</p></div>`;
   return `<div class="welcome"><div><h1>${admin ? "Admin Dashboard" : `Welcome, ${esc(d.user.name)} 👋`}</h1><p class="muted">${admin ? "Monitor portal activity, papers and payments." : "Access your revision papers, track your payments and stay updated."}</p></div></div><div class="stats"><div class="stat blue"><div class="stat-icon">${admin ? "♙" : "▤"}</div><span>${admin ? "Total Students" : "Total Requests"}</span><b>${admin ? users.filter((x) => x.role === "student").length : req.length}</b><small>${admin ? "Registered learners" : "This month"}</small></div><div class="stat green"><div class="stat-icon">✓</div><span>${admin ? "Total Papers" : "Papers Downloaded"}</span><b>${admin ? papers.length : paid}</b><small>${admin ? "Uploaded materials" : "This month"}</small></div><div class="stat orange"><div class="stat-icon">▣</div><span>${admin ? "Total Revenue" : "Total Spent"}</span><b>KSh ${admin ? pays.filter((x) => x.status === "success").reduce((a, x) => a + x.amount, 0) : pays.filter((x) => x.status === "success").reduce((a, x) => a + x.amount, 0)}</b><small>This month</small></div><div class="stat purple"><div class="stat-icon">◷</div><span>Pending Requests</span><b>${pending}</b><small>${admin ? "Awaiting action" : "Awaiting availability"}</small></div></div>${admin ? `<div class="insight-grid"><div class="panel chart-panel"><div class="panel-head"><h2>Transactions Overview</h2><span class="muted">This month⌄</span></div><div class="chart-bars">${[35, 52, 43, 68, 57, 74, 63, 82, 66, 88, 76, 94].map((v, i) => `<i style="height:${v}%" title="Week ${i + 1}"></i>`).join("")}</div><div class="chart-legend"><span><b class="dot success"></b>Successful</span><span><b class="dot failed"></b>Failed</span></div></div><div class="panel status-panel"><div class="panel-head"><h2>Request Status</h2><span class="donut">${req.length}</span></div><div class="status-row"><span class="dot success"></span>Delivered <b>${countSafe(req, (x) => x.status === "delivered")}</b></div><div class="status-row"><span class="dot pending"></span>Pending <b>${pending}</b></div><div class="status-row"><span class="dot processing"></span>Processing <b>${countSafe(req, (x) => x.status === "processing")}</b></div></div></div>` : ""}<div class="layout"><div><div class="panel"><div class="panel-head"><h2>${admin ? "Recent Paper Requests" : "Recent Paper Requests"}</h2><button class="link" data-goto="${admin ? "Requests & Orders" : "Request Papers"}">View all →</button></div><div class="table-wrap"><table><tr><th>Paper</th>${admin ? "<th>Student</th>" : ""}<th>Status</th><th>Date</th></tr>${
     req
       .slice(0, 6)
@@ -295,6 +332,10 @@ function pageContent(d, admin) {
       )
       .join("") || '<p class="muted">No notices.</p>'
   }</div></aside></div>`;
+}
+function avatarMarkup(user, extraClass = "") {
+  const initial = esc(user?.name?.[0]?.toUpperCase() || "C");
+  return `<div class="avatar ${extraClass}">${user?.avatarUrl ? `<img src="${esc(user.avatarUrl)}" alt="${esc(user.name || "Learner")} profile photo">` : initial}</div>`;
 }
 function countSafe(a, fn) {
   return a.filter(fn).length;
@@ -656,6 +697,175 @@ function wire(admin) {
       toast(x.message);
     }
   });
+  document.querySelectorAll("[data-service-pay]").forEach((button) => {
+    button.onclick = async () => {
+      if (button.disabled) return;
+      button.disabled = true;
+      try {
+        await payService(button.dataset.requestId, button.dataset.servicePay);
+      } finally {
+        if (button.isConnected) button.disabled = false;
+      }
+    };
+  });
+  $("#referRequestForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.currentTarget,
+      submit = form.querySelector('button[type="submit"]');
+    if (form.dataset.submitting) return;
+    form.dataset.submitting = "true";
+    if (submit) submit.disabled = true;
+    try {
+      const response = await api("/api/refer/requests", {
+        method: "POST",
+        body: JSON.stringify(Object.fromEntries(new FormData(form))),
+      });
+      toast(
+        `Refer request submitted. Reference: ${response.referRequest.id.slice(0, 8)}.`,
+      );
+      await load();
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      if (form.isConnected) {
+        delete form.dataset.submitting;
+        if (submit) submit.disabled = false;
+      }
+    }
+  });
+  document.querySelectorAll("[data-refer-status]").forEach((select) => {
+    select.onchange = async () => {
+      try {
+        await api("/api/admin/refer/status", {
+          method: "POST",
+          body: JSON.stringify({
+            id: select.dataset.referStatus,
+            status: select.value,
+          }),
+        });
+        toast("Refer request status updated.");
+        await load();
+      } catch (error) {
+        toast(error.message);
+      }
+    };
+  });
+  document.querySelectorAll("[data-service-manual]").forEach((button) => {
+    button.onclick = async () => {
+      const serviceType = button.dataset.serviceManual,
+        collection =
+          serviceType === "results"
+            ? state.data.resultRequests
+            : state.data.referRequests,
+        request = collection.find(
+          (item) => item.id === button.dataset.requestId,
+        ),
+        receipt = prompt(
+          "Verify the M-Pesa transaction and enter its receipt code:",
+        );
+      if (!receipt) return;
+      const amount = prompt(
+        "Enter the exact M-Pesa amount received:",
+        String(request?.serviceFee || ""),
+      );
+      if (amount === null) return;
+      const phone = prompt(
+        "Enter the payer's M-Pesa phone number shown in the transaction:",
+      );
+      if (!phone) return;
+      try {
+        await api("/api/admin/payments/service-manual", {
+          method: "POST",
+          body: JSON.stringify({
+            serviceType,
+            requestId: button.dataset.requestId,
+            receipt,
+            amount,
+            phone,
+          }),
+        });
+        toast("Payment recorded; service processing is unlocked.");
+        await load();
+      } catch (error) {
+        toast(error.message);
+      }
+    };
+  });
+  document.querySelectorAll("[data-reset-password]").forEach((button) => {
+    button.onclick = async () => {
+      const learner = (state.data.users || []).find(
+        (user) => user.id === button.dataset.resetPassword,
+      );
+      if (
+        !learner ||
+        !confirm(
+          `Issue a temporary password for ${learner.name}? Their existing sessions will be signed out.`,
+        )
+      )
+        return;
+      try {
+        const result = await api("/api/admin/users/reset-password", {
+          method: "POST",
+          body: JSON.stringify({ userId: learner.id }),
+        });
+        const message = `Temporary password for ${learner.name}: ${result.temporaryPassword}\n\nShare it privately. The learner must change it immediately after signing in.`;
+        try {
+          await navigator.clipboard.writeText(result.temporaryPassword);
+          alert(`${message}\n\nThe password was copied to your clipboard.`);
+        } catch {
+          prompt(message, result.temporaryPassword);
+        }
+        await load();
+      } catch (error) {
+        toast(error.message);
+      }
+    };
+  });
+  const avatarInput = $("#avatarFile");
+  avatarInput?.addEventListener("change", async () => {
+    const file = avatarInput.files?.[0];
+    if (!file) return;
+    if (
+      !["image/jpeg", "image/png", "image/webp"].includes(file.type) ||
+      file.size > 3 * 1024 * 1024
+    ) {
+      toast("Choose a JPEG, PNG or WebP image up to 3 MB.");
+      avatarInput.value = "";
+      return;
+    }
+    const preview = URL.createObjectURL(file),
+      profileAvatar = document.querySelector(".profile-avatar");
+    if (profileAvatar)
+      profileAvatar.innerHTML = `<img src="${preview}" alt="Profile photo preview">`;
+    $("#avatarMessage").textContent = "Uploading and verifying photo…";
+    try {
+      const signed = await api("/api/profile/avatar-upload-url", {
+        method: "POST",
+        body: JSON.stringify({ mime: file.type, size: file.size }),
+      });
+      const upload = await fetch(signed.uploadUrl, {
+        method: "PUT",
+        headers: { "x-upsert": "false", "content-type": file.type },
+        body: file,
+      });
+      if (!upload.ok) throw Error("Photo upload failed. Please try again.");
+      await api("/api/profile/avatar-complete", {
+        method: "POST",
+        body: JSON.stringify({
+          storagePath: signed.storagePath,
+          size: file.size,
+        }),
+      });
+      URL.revokeObjectURL(preview);
+      toast("Profile photo updated.");
+      await load();
+    } catch (error) {
+      URL.revokeObjectURL(preview);
+      $("#avatarMessage").textContent = error.message;
+      toast(error.message);
+      await load();
+    }
+  });
   $("#settingsForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     try {
@@ -713,10 +923,15 @@ function wire(admin) {
   });
   $("#resultRequestForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const form = e.currentTarget,
+      submit = form.querySelector('button[type="submit"]');
+    if (form.dataset.submitting) return;
+    form.dataset.submitting = "true";
+    if (submit) submit.disabled = true;
     try {
       const response = await api("/api/results/requests", {
         method: "POST",
-        body: JSON.stringify(Object.fromEntries(new FormData(e.target))),
+        body: JSON.stringify(Object.fromEntries(new FormData(form))),
       });
       toast(
         `Results request submitted. Reference: ${response.resultRequest.id.slice(0, 8)}.`,
@@ -724,6 +939,11 @@ function wire(admin) {
       await load();
     } catch (error) {
       toast(error.message);
+    } finally {
+      if (form.isConnected) {
+        delete form.dataset.submitting;
+        if (submit) submit.disabled = false;
+      }
     }
   });
   $("#resultLookupForm")?.addEventListener("submit", async (e) => {
@@ -820,6 +1040,54 @@ function wire(admin) {
       toast(x.message);
     }
   });
+}
+async function payService(id, serviceType) {
+  const phone = normPhone(
+    prompt(
+      "Enter your M-Pesa number for the payment prompt (e.g. 07XXXXXXXX):",
+      state.phone || state.user.phone || "",
+    ),
+  );
+  if (!/^254\d{9}$/.test(phone)) {
+    toast("Enter a valid Kenyan phone number.");
+    return;
+  }
+  try {
+    state.phone = phone;
+    toast("Sending M-Pesa prompt to your phone…");
+    await api("/api/payments/stk", {
+      method: "POST",
+      body: JSON.stringify({ requestId: id, phone, serviceType }),
+    });
+    await waitServicePaid(id, serviceType);
+  } catch (error) {
+    toast(error.message);
+  }
+}
+async function waitServicePaid(id, serviceType) {
+  for (let attempt = 0; attempt < 30; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    try {
+      const result = await api(
+        `/api/payments/status/${encodeURIComponent(id)}?serviceType=${encodeURIComponent(serviceType)}`,
+      );
+      if (result.status === "paid") {
+        toast("Payment confirmed. Your service request is now queued.");
+        await load();
+        return true;
+      }
+      if (result.status === "failed") {
+        toast("Payment was not completed. Use Retry payment to try again.");
+        await load();
+        return false;
+      }
+    } catch {}
+  }
+  toast(
+    "Payment is still awaiting confirmation. Check the request status shortly.",
+  );
+  await load();
+  return false;
 }
 function normPhone(v) {
   v = String(v || "").replace(/[\s-]/g, "");

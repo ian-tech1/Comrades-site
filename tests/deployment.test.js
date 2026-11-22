@@ -151,3 +151,48 @@ test("deployment configuration targets the canonical API and Node 22 runtime", a
   assert.equal(vercel.rewrites[0].destination, "/api/index?__path=:path*");
   assert.equal(pkg.engines.node, "22.x");
 });
+
+test("academic service payments reject closed requests and prevent duplicate confirmations", async () => {
+  const [api, app, schema, deployment] = await Promise.all([
+    readFile(new URL("api/index.js", root), "utf8"),
+    readFile(new URL("public/app.js", root), "utf8"),
+    readFile(new URL("supabase/schema.sql", root), "utf8"),
+    readFile(new URL("DEPLOYMENT.md", root), "utf8"),
+  ]);
+  assert.match(
+    api,
+    /if \(u\.mustChangePassword\) return json\(res, 200, \{ user: u \}\);/,
+  );
+  const manualStart = api.indexOf(
+      'if (method === "POST" && path === "/api/admin/payments/service-manual")',
+    ),
+    manualEnd = api.indexOf(
+      'if (method === "POST" && path === "/api/admin/payments/manual")',
+      manualStart,
+    ),
+    manualRoute = api.slice(manualStart, manualEnd);
+  assert.ok(manualStart >= 0 && manualEnd > manualStart);
+  assert.match(manualRoute, /request\.status === "rejected"/);
+  assert.match(manualRoute, /amount !== Number\(request\.service_fee\)/);
+  assert.match(manualRoute, /paid_phone: phone/);
+  assert.match(manualRoute, /error\?\.code === "23505"/);
+  assert.match(
+    schema,
+    /payments_one_successful_results_request_idx[\s\S]*?status = 'success'/,
+  );
+  assert.match(
+    schema,
+    /payments_one_successful_refer_request_idx[\s\S]*?status = 'success'/,
+  );
+  assert.ok(
+    (
+      app.match(/r\.paymentStatus !== "paid" && r\.status !== "rejected"/g) ||
+      []
+    ).length >= 2,
+  );
+  assert.match(api, /createSignedUrl\(profile\.avatar_path, 120\)/);
+  assert.match(
+    deployment,
+    /first execute only the v16\.4 setup statements[\s\S]*?Then run these checks/,
+  );
+});
