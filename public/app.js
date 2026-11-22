@@ -1,5 +1,12 @@
 const $ = (s) => document.querySelector(s);
-let state = { user: null, data: null, tab: "Dashboard", mode: "login" };
+let state = {
+  user: null,
+  data: null,
+  tab: "Dashboard",
+  mode: "login",
+  includeArchived: false,
+  refreshedAt: null,
+};
 async function api0(url, opts = {}) {
   let r;
   try {
@@ -62,6 +69,20 @@ function esc(s = "") {
       ],
   );
 }
+function formatNairobi(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "—"
+    : new Intl.DateTimeFormat(undefined, {
+        timeZone: "Africa/Nairobi",
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(date);
+}
+function metaLabel(value) {
+  return value ? String(value).replaceAll("_", " ") : "unavailable";
+}
 function status(s) {
   let c = ["paid", "success", "delivered"].includes(s)
     ? ""
@@ -105,9 +126,12 @@ function authView() {
 }
 async function load() {
   try {
-    const x = await api("/api/dashboard");
+    const x = await api(
+      `/api/dashboard${state.includeArchived ? "?includeArchived=true" : ""}`,
+    );
     state.data = x;
     state.user = x.user;
+    state.refreshedAt = new Date();
     render();
   } catch {
     state.user = null;
@@ -154,7 +178,7 @@ function render() {
     pays = d.payments || [],
     papers = d.papers || [];
   $("#app").innerHTML =
-    `<div class="shell"><aside class="side" id="side"><div class="brand"><span class="brand-icon">🎓</span><div><strong>Comreds Papers Portal</strong><small>${admin ? "Admin Panel" : "Learn · Prepare · Succeed"}</small></div></div><nav class="nav">${nav.map((n) => `<button class="${state.tab === n ? "active" : ""}" data-tab="${n}">${{ Dashboard: "⌂", "Manage Papers": "▤", "Manage Members": "♙", "Requests & Orders": "▣", "Results Requests": "▧", "Refer Requests": "↻", "Refer Registration": "↻", "Request Results": "▤", "Check Results": "✓", Transactions: "▧", "Payment Reports": "▥", "Emergency Papers": "⚠", "System Settings": "⚙", "Request Papers": "▤", "My Papers": "▣", Payments: "▣", "Transaction History": "▤", "My Profile": "♙" }[n] || "•"} &nbsp; ${n}</button>`).join("")}</nav><div class="side-foot">“Small steps everyday lead to big results.”<br><br><button class="link" id="logout" style="color:white">↪ Log out</button></div></aside><main class="main"><header class="top"><button class="mobile-menu" id="menu">☰</button><input class="search" id="search" placeholder="⌕  Search for papers (e.g. Mathematics, Automotive...)"/><div class="top-tools"><button class="icon-btn" title="Notifications">♢<span class="notification-count">${(d.notifications || []).filter((n) => !n.read_at).length || ""}</span></button></div><div class="user">${avatarMarkup(u, "header-avatar")}<div><b>${esc(u.name)}</b><br><small class="muted">${admin ? "Administrator" : "Student"}</small></div></div></header><section class="content" id="content">${pageContent(d, admin)}</section></main></div>`;
+    `<div class="shell"><aside class="side" id="side"><div class="brand"><span class="brand-icon">🎓</span><div><strong>Comreds Papers Portal</strong><small>${admin ? "Admin Panel" : "Learn · Prepare · Succeed"}</small></div></div><nav class="nav">${nav.map((n) => `<button class="${state.tab === n ? "active" : ""}" data-tab="${n}">${{ Dashboard: "⌂", "Manage Papers": "▤", "Manage Members": "♙", "Requests & Orders": "▣", "Results Requests": "▧", "Refer Requests": "↻", "Refer Registration": "↻", "Request Results": "▤", "Check Results": "✓", Transactions: "▧", "Payment Reports": "▥", "Emergency Papers": "⚠", "System Settings": "⚙", "Request Papers": "▤", "My Papers": "▣", Payments: "▣", "Transaction History": "▤", "My Profile": "♙" }[n] || "•"} &nbsp; ${n}</button>`).join("")}</nav><div class="side-foot">“Small steps everyday lead to big results.”<br><br><button class="link" id="logout" style="color:white">↪ Log out</button></div></aside><main class="main"><header class="top"><button class="mobile-menu" id="menu">☰</button><input class="search" id="search" placeholder="⌕  Search for papers (e.g. Mathematics, Automotive...)"/><div class="top-tools"><button class="icon-btn" title="Notifications">♢<span class="notification-count">${(d.notifications || []).filter((n) => !n.read_at).length || ""}</span></button><button class="icon" id="refreshDashboard" type="button">Refresh</button></div><div class="user">${avatarMarkup(u, "header-avatar")}<div><b>${esc(u.name)}</b><br><small class="muted">${admin ? "Administrator" : "Student"}</small></div></div></header><section class="content" id="content"><div class="refresh-bar"><small class="muted" id="refreshFeedback">Last refreshed: ${state.refreshedAt ? esc(state.refreshedAt.toLocaleString()) : "not yet"}</small><label class="chk archived-toggle"><input type="checkbox" id="includeArchived" ${state.includeArchived ? "checked" : ""}> Include archived records</label></div>${pageContent(d, admin)}</section></main></div>`;
   document.querySelectorAll("[data-tab]").forEach(
     (b) =>
       (b.onclick = () => {
@@ -169,6 +193,18 @@ function render() {
     authView();
   };
   $("#menu").onclick = () => $("#side").classList.toggle("open");
+  $("#refreshDashboard")?.addEventListener("click", async () => {
+    try {
+      await load();
+      toast("Dashboard refreshed.");
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $("#includeArchived")?.addEventListener("change", async (event) => {
+    state.includeArchived = event.target.checked;
+    await load();
+  });
   $("#search").oninput = (e) => {
     const v = e.target.value.toLowerCase();
     document
@@ -193,17 +229,17 @@ function pageContent(d, admin) {
     );
   const title = state.tab;
   if (title === "Request Results")
-    return `<div class="welcome"><div><h1>Request Academic Results</h1><p class="muted">Send your institution and student details to the admin for processing; pay the listed service fee for each request.</p></div></div><div class="panel service-intro"><div><span class="service-kicker">ACADEMIC RESULTS SERVICE</span><h2>Results request</h2><p class="muted">Requests are private to you and the portal administrator.</p></div><div class="service-price">${d.settings.resultsRequestPrice > 0 ? `KSh ${Number(d.settings.resultsRequestPrice).toLocaleString()} <small>per request</small>` : "<small>Price not configured yet</small>"}</div></div>${d.settings.resultsRequestPrice > 0 ? `<div class="panel"><h2>Submit a results request</h2><form id="resultRequestForm" class="form-grid"><div class="field"><label>Institution name</label><input name="institutionName" maxlength="160" required placeholder="College or university"></div><div class="field"><label>Registration number</label><input name="registrationNumber" maxlength="80" required></div><div class="field"><label>Admission number</label><input name="admissionNumber" maxlength="80" required></div><div class="field full"><label>Registered units (one per line)</label><textarea name="registeredUnits" rows="5" maxlength="5000" required placeholder="MAT 101 — Calculus&#10;CSC 102 — Programming"></textarea></div><div class="full"><button class="btn">Submit request · KSh ${Number(d.settings.resultsRequestPrice).toLocaleString()}</button></div></form></div>` : '<div class="panel muted">Results requests are temporarily unavailable. Please check again after an administrator publishes the service fee.</div>'}<div class="panel"><h2>Your requests</h2><div class="table-wrap"><table><tr><th>Institution</th><th>Registration</th><th>Admission</th><th>Units</th><th>Fee</th><th>Payment</th><th>Status</th><th>Submitted</th><th>Action</th></tr>${resultRequests.map((r) => `<tr><td>${esc(r.institutionName)}</td><td>${esc(r.registrationNumber)}</td><td>${esc(r.admissionNumber)}</td><td>${r.registeredUnits.map(esc).join(", ")}</td><td>KSh ${Number(r.serviceFee).toLocaleString()}</td><td>${status(r.paymentStatus)}</td><td>${status(r.status)}</td><td>${new Date(r.createdAt).toLocaleDateString()}</td><td>${r.status === "rejected" ? "Request rejected" : r.paymentStatus === "paid" ? "Paid" : `<button class="btn" data-service-pay="results" data-request-id="${esc(r.id)}">${r.paymentStatus === "failed" ? "Retry payment" : "Pay now"}</button>`}</td></tr>`).join("") || '<tr><td colspan="9" class="muted">You have not requested results yet.</td></tr>'}</table></div></div>`;
+    return `<div class="welcome"><div><h1>Request Academic Results</h1><p class="muted">Send your institution and student details to the admin for processing; pay the listed service fee for each request.</p></div></div><div class="panel service-intro"><div><span class="service-kicker">ACADEMIC RESULTS SERVICE</span><h2>Results request</h2><p class="muted">Requests are private to you and the portal administrator.</p></div><div class="service-price">${d.settings.resultsRequestPrice > 0 ? `KSh ${Number(d.settings.resultsRequestPrice).toLocaleString()} <small>per request</small>` : "<small>Price not configured yet</small>"}</div></div>${d.settings.resultsRequestPrice > 0 ? `<div class="panel"><h2>Submit a results request</h2><form id="resultRequestForm" class="form-grid"><div class="field"><label>Institution name</label><input name="institutionName" maxlength="160" required placeholder="College or university"></div><div class="field"><label>Registration number</label><input name="registrationNumber" maxlength="80" required></div><div class="field"><label>Admission number</label><input name="admissionNumber" maxlength="80" required></div><div class="field full"><label>Registered units (one per line)</label><textarea name="registeredUnits" rows="5" maxlength="5000" required placeholder="MAT 101 — Calculus&#10;CSC 102 — Programming"></textarea></div><div class="full"><button class="btn">Submit request · KSh ${Number(d.settings.resultsRequestPrice).toLocaleString()}</button></div></form></div>` : '<div class="panel muted">Results requests are temporarily unavailable. Please check again after an administrator publishes the service fee.</div>'}<div class="panel"><h2>Your requests</h2><div class="table-wrap"><table><tr><th>Institution</th><th>Registration</th><th>Admission</th><th>Units</th><th>Fee</th><th>Payment</th><th>Status</th><th>Submitted</th><th>Action</th></tr>${resultRequests.map((r) => `<tr><td>${esc(r.institutionName)}</td><td>${esc(r.registrationNumber)}</td><td>${esc(r.admissionNumber)}</td><td>${r.registeredUnits.map(esc).join(", ")}</td><td>KSh ${Number(r.serviceFee).toLocaleString()}</td><td>${status(r.paymentStatus)}</td><td>${status(r.status)}</td><td>${new Date(r.createdAt).toLocaleDateString()}</td><td>${r.status === "rejected" ? "Request rejected" : r.paymentStatus === "paid" ? "Paid" : `<button class="btn" data-service-pay="results" data-request-id="${esc(r.id)}">${r.paymentStatus === "failed" ? "Retry payment" : "Pay now"}</button>`} <button class="icon" data-archive-type="results" data-archive-id="${esc(r.id)}" data-archive-action="${r.archived || r.archivedAt || r.isArchived ? "restore" : "archive"}">${r.archived || r.archivedAt || r.isArchived ? "Restore" : "Archive"}</button></td></tr>`).join("") || '<tr><td colspan="9" class="muted">You have not requested results yet.</td></tr>'}</table></div></div>`;
   if (title === "Refer Registration" && !admin)
-    return `<div class="welcome"><div><h1>Register for Supplementary Exams</h1><p class="muted">Request registration for units you failed, then pay the published service fee.</p></div></div><div class="panel service-intro"><div><span class="service-kicker">FAILED-EXAM SERVICE</span><h2>Refer registration</h2><p class="muted">Enter the same institution and student identifiers used by your school. List each failed unit on a separate line.</p></div><div class="service-price">${d.settings.referRegistrationPrice > 0 ? `KSh ${Number(d.settings.referRegistrationPrice).toLocaleString()} <small>per request</small>` : "<small>Price not configured yet</small>"}</div></div>${d.settings.referRegistrationPrice > 0 ? `<div class="panel"><h2>Submit a refer request</h2><form id="referRequestForm" class="form-grid"><div class="field"><label>Institution name</label><input name="institutionName" maxlength="160" required placeholder="College or university"></div><div class="field"><label>Registration number</label><input name="registrationNumber" maxlength="80" required></div><div class="field"><label>Admission number</label><input name="admissionNumber" maxlength="80" required></div><div class="field"><label>Exam period</label><input name="examPeriod" maxlength="80" required placeholder="e.g. May–June 2026"></div><div class="field full"><label>Failed units (one per line)</label><textarea name="failedUnits" rows="5" maxlength="5000" required placeholder="MAT 101 — Calculus&#10;CSC 102 — Programming"></textarea><small class="muted">1–40 units, up to 120 characters each.</small></div><div class="field full"><label>Notes (optional)</label><textarea name="notes" rows="3" maxlength="1000" placeholder="Any useful context for the administrator"></textarea></div><div class="full"><button class="btn">Submit refer request · KSh ${Number(d.settings.referRegistrationPrice).toLocaleString()}</button></div></form></div>` : '<div class="panel muted">Refer registration is temporarily unavailable. Please check again after an administrator publishes the service fee.</div>'}<div class="panel"><h2>Your refer requests</h2><div class="table-wrap"><table><tr><th>Institution</th><th>Exam period</th><th>Failed units</th><th>Service fee</th><th>Payment</th><th>Request status</th><th>Date</th><th>Action</th></tr>${referRequests.map((r) => `<tr><td>${esc(r.institutionName)}</td><td>${esc(r.examPeriod)}</td><td>${r.failedUnits.map(esc).join(", ")}</td><td>KSh ${Number(r.serviceFee).toLocaleString()}</td><td>${status(r.paymentStatus)}</td><td>${status(r.status)}</td><td>${new Date(r.createdAt).toLocaleDateString()}</td><td>${r.status === "rejected" ? "Request rejected" : r.paymentStatus === "paid" ? (r.status === "registered" ? "Registered" : "Payment confirmed") : `<button class="btn" data-service-pay="refer" data-request-id="${esc(r.id)}">${r.paymentStatus === "failed" ? "Retry payment" : "Pay now"}</button>`}</td></tr>`).join("") || '<tr><td colspan="8" class="muted">No refer requests submitted yet.</td></tr>'}</table></div></div>`;
+    return `<div class="welcome"><div><h1>Register for Supplementary Exams</h1><p class="muted">Request registration for units you failed, then pay the published service fee.</p></div></div><div class="panel service-intro"><div><span class="service-kicker">FAILED-EXAM SERVICE</span><h2>Refer registration</h2><p class="muted">Enter the same institution and student identifiers used by your school. List each failed unit on a separate line.</p></div><div class="service-price">${d.settings.referRegistrationPrice > 0 ? `KSh ${Number(d.settings.referRegistrationPrice).toLocaleString()} <small>per request</small>` : "<small>Price not configured yet</small>"}</div></div>${d.settings.referRegistrationPrice > 0 ? `<div class="panel"><h2>Submit a refer request</h2><form id="referRequestForm" class="form-grid"><div class="field"><label>Institution name</label><input name="institutionName" maxlength="160" required placeholder="College or university"></div><div class="field"><label>Registration number</label><input name="registrationNumber" maxlength="80" required></div><div class="field"><label>Admission number</label><input name="admissionNumber" maxlength="80" required></div><div class="field"><label>Exam period</label><input name="examPeriod" maxlength="80" required placeholder="e.g. May–June 2026"></div><div class="field full"><label>Failed units (one per line)</label><textarea name="failedUnits" rows="5" maxlength="5000" required placeholder="MAT 101 — Calculus&#10;CSC 102 — Programming"></textarea><small class="muted">1–40 units, up to 120 characters each.</small></div><div class="field full"><label>Notes (optional)</label><textarea name="notes" rows="3" maxlength="1000" placeholder="Any useful context for the administrator"></textarea></div><div class="full"><button class="btn">Submit refer request · KSh ${Number(d.settings.referRegistrationPrice).toLocaleString()}</button></div></form></div>` : '<div class="panel muted">Refer registration is temporarily unavailable. Please check again after an administrator publishes the service fee.</div>'}<div class="panel"><h2>Your refer requests</h2><div class="table-wrap"><table><tr><th>Institution</th><th>Exam period</th><th>Failed units</th><th>Service fee</th><th>Payment</th><th>Request status</th><th>Date</th><th>Action</th></tr>${referRequests.map((r) => `<tr><td>${esc(r.institutionName)}</td><td>${esc(r.examPeriod)}</td><td>${r.failedUnits.map(esc).join(", ")}</td><td>KSh ${Number(r.serviceFee).toLocaleString()}</td><td>${status(r.paymentStatus)}</td><td>${status(r.status)}</td><td>${new Date(r.createdAt).toLocaleDateString()}</td><td>${r.status === "rejected" ? "Request rejected" : r.paymentStatus === "paid" ? (r.status === "registered" ? "Registered" : "Payment confirmed") : `<button class="btn" data-service-pay="refer" data-request-id="${esc(r.id)}">${r.paymentStatus === "failed" ? "Retry payment" : "Pay now"}</button>`} <button class="icon" data-archive-type="refer" data-archive-id="${esc(r.id)}" data-archive-action="${r.archived || r.archivedAt || r.isArchived ? "restore" : "archive"}">${r.archived || r.archivedAt || r.isArchived ? "Restore" : "Archive"}</button></td></tr>`).join("") || '<tr><td colspan="8" class="muted">No refer requests submitted yet.</td></tr>'}</table></div></div>`;
   if (title === "Check Results")
-    return `<div class="welcome"><div><h1>Check Your Results</h1><p class="muted">Use the same institution, registration number and admission number you submitted with your request.</p></div></div><div class="panel"><form id="resultLookupForm" class="form-grid"><div class="field"><label>Institution name</label><input name="institution" required></div><div class="field"><label>Registration number</label><input name="registration" required></div><div class="field"><label>Admission number</label><input name="admission" required></div><div class="full"><button class="btn">Check results</button></div></form><div id="resultsLookup" aria-live="polite"></div></div><div class="panel"><h2>Your submitted results requests</h2><div class="table-wrap"><table><tr><th>Institution</th><th>Registration</th><th>Status</th><th>Updated</th><th>Results</th></tr>${resultRequests.map((r) => `<tr><td>${esc(r.institutionName)}</td><td>${esc(r.registrationNumber)}</td><td>${status(r.status)}</td><td>${new Date(r.updatedAt || r.createdAt).toLocaleDateString()}</td><td>${r.status === "completed" ? `<a class="btn" href="/api/results/download/${encodeURIComponent(r.id)}">Download PDF</a>` : "Not ready"}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No results requests found.</td></tr>'}</table></div></div>`;
+    return `<div class="welcome"><div><h1>Check Your Results</h1><p class="muted">Use the same institution, registration number and admission number you submitted with your request.</p></div></div><div class="panel"><form id="resultLookupForm" class="form-grid"><div class="field"><label>Institution name</label><input name="institution" required></div><div class="field"><label>Registration number</label><input name="registration" required></div><div class="field"><label>Admission number</label><input name="admission" required></div><div class="full"><button class="btn">Check results</button></div></form><div id="resultsLookup" aria-live="polite"></div></div><div class="panel"><h2>Your submitted results requests</h2><div class="table-wrap"><table><tr><th>Institution</th><th>Registration</th><th>Status</th><th>Updated</th><th>Results</th><th>Action</th></tr>${resultRequests.map((r) => `<tr><td>${esc(r.institutionName)}</td><td>${esc(r.registrationNumber)}</td><td>${status(r.status)}</td><td>${new Date(r.updatedAt || r.createdAt).toLocaleDateString()}</td><td>${r.status === "completed" ? `<a class="btn" href="/api/results/download/${encodeURIComponent(r.id)}">Download PDF</a>` : "Not ready"}</td><td><button class="icon" data-archive-type="results" data-archive-id="${esc(r.id)}" data-archive-action="${r.archived || r.archivedAt || r.isArchived ? "restore" : "archive"}">${r.archived || r.archivedAt || r.isArchived ? "Restore" : "Archive"}</button></td></tr>`).join("") || '<tr><td colspan="6" class="muted">No results requests found.</td></tr>'}</table></div></div>`;
   if (title === "Results Requests" && admin)
     return `<div class="welcome"><div><h1>Academic Results Requests</h1><p class="muted">Review student details, update progress and upload each private PDF result.</p></div></div>${
       resultRequests
         .map((r) => {
           const student = users.find((x) => x.id === r.userId) || {};
-          return `<div class="panel result-request"><div class="panel-head"><h2>Request ${esc(r.id.slice(0, 8))}</h2>${status(r.status)}</div><p><b>Student:</b> ${esc(student.name || "Learner")} · ${esc(student.username || "")} · ${esc(student.email || "")}</p><p><b>Institution:</b> ${esc(r.institutionName)}</p><p><b>Registration number:</b> ${esc(r.registrationNumber)} &nbsp; <b>Admission number:</b> ${esc(r.admissionNumber)}</p><p><b>Registered units:</b> ${r.registeredUnits.map(esc).join(", ")}</p><p><b>Service fee:</b> KSh ${Number(r.serviceFee).toLocaleString()} · <b>Payment:</b> ${status(r.paymentStatus)}</p>${r.paymentStatus !== "paid" && r.status !== "rejected" ? `<button class="btn" data-service-manual="results" data-request-id="${esc(r.id)}">Record verified M-Pesa receipt</button>` : ""}<p class="muted">Submitted ${new Date(r.createdAt).toLocaleString()}${r.resultFileName ? ` · Current file: ${esc(r.resultFileName)}` : ""}</p><div class="form-grid"><div class="field"><label>Request status</label><select data-result-status="${esc(r.id)}" ${r.status === "completed" ? "disabled" : ""}><option value="requested" ${r.status === "requested" ? "selected" : ""}>Requested</option><option value="processing" ${r.status === "processing" ? "selected" : ""}>Processing</option><option value="rejected" ${r.status === "rejected" ? "selected" : ""}>Rejected</option>${r.status === "completed" ? '<option value="completed" selected>Completed</option>' : ""}</select></div><form class="field result-upload-form" data-result-upload="${esc(r.id)}"><label>${r.resultFileName ? "Replace results PDF" : "Upload results PDF"}</label><input type="file" name="file" accept="application/pdf,.pdf" required><button class="btn" type="submit">${r.resultFileName ? "Replace PDF" : "Upload PDF and notify student"}</button></form></div></div>`;
+          return `<div class="panel result-request ${r.archived || r.archivedAt || r.isArchived ? "archived-row" : ""}"><div class="panel-head"><h2>Request ${esc(String(r.id || "").slice(0, 8))}</h2><div>${status(r.status)} <button class="icon" data-archive-type="results" data-archive-id="${esc(r.id)}" data-archive-action="${r.archived || r.archivedAt || r.isArchived ? "restore" : "archive"}">${r.archived || r.archivedAt || r.isArchived ? "Restore" : "Archive"}</button></div></div><p><b>Student:</b> ${esc(student.name || "Learner")} · ${esc(student.username || "")} · ${esc(student.email || "")}</p><p><b>Institution:</b> ${esc(r.institutionName)}</p><p><b>Registration number:</b> ${esc(r.registrationNumber)} &nbsp; <b>Admission number:</b> ${esc(r.admissionNumber)}</p><p><b>Registered units:</b> ${r.registeredUnits.map(esc).join(", ")}</p><p><b>Service fee:</b> KSh ${Number(r.serviceFee).toLocaleString()} · <b>Payment:</b> ${status(r.paymentStatus)}</p>${r.paymentStatus !== "paid" && r.status !== "rejected" ? `<button class="btn" data-service-manual="results" data-request-id="${esc(r.id)}">Record verified M-Pesa receipt</button>` : ""}<p class="muted">Submitted ${new Date(r.createdAt).toLocaleString()}${r.resultFileName ? ` · Current file: ${esc(r.resultFileName)}` : ""}</p><div class="form-grid"><div class="field"><label>Request status</label><select data-result-status="${esc(r.id)}" ${r.status === "completed" ? "disabled" : ""}><option value="requested" ${r.status === "requested" ? "selected" : ""}>Requested</option><option value="processing" ${r.status === "processing" ? "selected" : ""}>Processing</option><option value="rejected" ${r.status === "rejected" ? "selected" : ""}>Rejected</option>${r.status === "completed" ? '<option value="completed" selected>Completed</option>' : ""}</select></div><form class="field result-upload-form" data-result-upload="${esc(r.id)}"><label>${r.resultFileName ? "Replace results PDF" : "Upload results PDF"}</label><input type="file" name="file" accept="application/pdf,.pdf" required><button class="btn" type="submit">${r.resultFileName ? "Replace PDF" : "Upload PDF and notify student"}</button></form></div></div>`;
         })
         .join("") ||
       '<div class="panel muted">There are no academic results requests yet.</div>'
@@ -213,7 +249,7 @@ function pageContent(d, admin) {
       referRequests
         .map((r) => {
           const student = users.find((x) => x.id === r.userId) || {};
-          return `<div class="panel result-request"><div class="panel-head"><h2>Request ${esc(r.id.slice(0, 8))}</h2>${status(r.status)}</div><p><b>Student:</b> ${esc(student.name || "Learner")} · ${esc(student.username || "")} · ${esc(student.email || "")}</p><p><b>Institution:</b> ${esc(r.institutionName)} · <b>Exam period:</b> ${esc(r.examPeriod)}</p><p><b>Registration:</b> ${esc(r.registrationNumber)} · <b>Admission:</b> ${esc(r.admissionNumber)}</p><p><b>Failed units:</b> ${r.failedUnits.map(esc).join(", ")}</p>${r.notes ? `<p><b>Notes:</b> ${esc(r.notes)}</p>` : ""}<p><b>Fee:</b> KSh ${Number(r.serviceFee).toLocaleString()} · <b>Payment:</b> ${status(r.paymentStatus)}</p><small class="muted">Submitted ${new Date(r.createdAt).toLocaleString()}</small><div class="row-actions"><label class="field"><span>Request status</span><select data-refer-status="${esc(r.id)}" ${r.paymentStatus !== "paid" ? "disabled" : ""}><option value="requested" ${r.status === "requested" ? "selected" : ""}>Requested</option><option value="processing" ${r.status === "processing" ? "selected" : ""}>Processing</option><option value="registered" ${r.status === "registered" ? "selected" : ""}>Registered</option><option value="rejected" ${r.status === "rejected" ? "selected" : ""}>Rejected</option></select></label>${r.paymentStatus !== "paid" && r.status !== "rejected" ? `<button class="btn" data-service-manual="refer" data-request-id="${esc(r.id)}">Record verified M-Pesa receipt</button>` : ""}</div></div>`;
+          return `<div class="panel result-request ${r.archived || r.archivedAt || r.isArchived ? "archived-row" : ""}"><div class="panel-head"><h2>Request ${esc(String(r.id || "").slice(0, 8))}</h2><div>${status(r.status)} <button class="icon" data-archive-type="refer" data-archive-id="${esc(r.id)}" data-archive-action="${r.archived || r.archivedAt || r.isArchived ? "restore" : "archive"}">${r.archived || r.archivedAt || r.isArchived ? "Restore" : "Archive"}</button></div></div><p><b>Student:</b> ${esc(student.name || "Learner")} · ${esc(student.username || "")} · ${esc(student.email || "")}</p><p><b>Institution:</b> ${esc(r.institutionName)} · <b>Exam period:</b> ${esc(r.examPeriod)}</p><p><b>Registration:</b> ${esc(r.registrationNumber)} · <b>Admission:</b> ${esc(r.admissionNumber)}</p><p><b>Failed units:</b> ${r.failedUnits.map(esc).join(", ")}</p>${r.notes ? `<p><b>Notes:</b> ${esc(r.notes)}</p>` : ""}<p><b>Fee:</b> KSh ${Number(r.serviceFee).toLocaleString()} · <b>Payment:</b> ${status(r.paymentStatus)}</p><small class="muted">Submitted ${new Date(r.createdAt).toLocaleString()}</small><div class="row-actions"><label class="field"><span>Request status</span><select data-refer-status="${esc(r.id)}" ${r.paymentStatus !== "paid" ? "disabled" : ""}><option value="requested" ${r.status === "requested" ? "selected" : ""}>Requested</option><option value="processing" ${r.status === "processing" ? "selected" : ""}>Processing</option><option value="registered" ${r.status === "registered" ? "selected" : ""}>Registered</option><option value="rejected" ${r.status === "rejected" ? "selected" : ""}>Rejected</option></select></label>${r.paymentStatus !== "paid" && r.status !== "rejected" ? `<button class="btn" data-service-manual="refer" data-request-id="${esc(r.id)}">Record verified M-Pesa receipt</button>` : ""}</div></div>`;
         })
         .join("") ||
       '<div class="panel muted">No refer-registration requests have been submitted.</div>'
@@ -257,13 +293,8 @@ function pageContent(d, admin) {
                     .map((x) => `<option>${x}</option>`)
                     .join(
                       "",
-                    )}</select> <button class="icon" data-delete-request="${r.id}">Delete</button>`
-                : r.status === "paid"
-                  ? `<button class="link" data-download="${r.paperId}">Download</button>`
-                  : r.status === "awaiting_payment" ||
-                      r.status === "payment_failed"
-                    ? `<button class="link" data-pay="${r.id}">Pay now</button> <button class="icon" data-delete-request="${r.id}">Delete</button>`
-                    : `<button class="icon" data-delete-request="${r.id}">Delete</button>`
+                    )}</select> <button class="icon" data-delete-request="${r.id}">Delete</button> <button class="icon" data-archive-type="paper" data-archive-id="${esc(r.id)}" data-archive-action="${r.archivedAt ? "restore" : "archive"}">${r.archivedAt ? "Restore" : "Archive"}</button>`
+                : `${r.status === "paid" ? `<button class="link" data-download="${esc(r.paperId)}">Download</button>` : r.status === "awaiting_payment" || r.status === "payment_failed" ? `<button class="link" data-pay="${esc(r.id)}">Pay now</button> ` : ""}<button class="icon" data-archive-type="paper" data-archive-id="${esc(r.id)}" data-archive-action="${r.archived || r.archivedAt || r.isArchived ? "restore" : "archive"}">${r.archived || r.archivedAt || r.isArchived ? "Restore" : "Archive"}</button>`
             }</td></tr>`,
         )
         .join("") || '<tr><td colspan="7">No requests yet.</td></tr>'
@@ -273,37 +304,87 @@ function pageContent(d, admin) {
     title === "Transactions" ||
     title === "Payment Reports" ||
     title === "Transaction History"
-  )
-    return `<div class="welcome"><div><h1>${admin ? "Transactions" : "Payments & Transaction History"}</h1><p class="muted">M-Pesa payment activity and receipts.</p></div></div>${admin ? adminCharts(pays, req) : ""}${
-      admin
-        ? `<div class="panel"><h2>Total received: KSh ${pays.filter((x) => x.status === "success").reduce((t, x) => t + x.amount, 0)}</h2><p class="muted">Today: KSh ${pays.filter((x) => x.status === "success" && new Date(x.createdAt).toDateString() === new Date().toDateString()).reduce((t, x) => t + x.amount, 0)} · ${pays.filter((x) => x.status === "success").length} successful payments</p><input id="txSearch" placeholder="Search name, paper or M-Pesa code" style="width:100%;margin:8px 0"><button class="btn" type="button" id="reconcile">Check pending payments</button><form id="manualPay" class="form-grid"><div class="field"><label>Unpaid request</label><select name="requestId" required>${req
-            .filter((r) => r.status !== "paid" && r.paperId)
-            .map(
-              (r) =>
-                `<option value="${r.id}">${esc(r.studentName)} – ${esc(r.title)} (KSh ${r.amount})</option>`,
-            )
-            .join(
-              "",
-            )}</select></div><div class="field"><label>M-Pesa code</label><input name="receipt" required placeholder="e.g. UJV570GU3H"></div><div class="full"><button class="btn">Confirm payment manually</button></div></form></div>`
-        : ""
-    }<div class="panel"><div class="table-wrap"><table><tr><th>Date</th>${admin ? "<th>Student</th>" : ""}<th>Service</th><th>Amount</th><th>Phone</th><th>Status</th><th>M-Pesa code</th></tr>${
-      pays
+  ) {
+    const visiblePays = pays,
+      pendingPayments = pays.filter(
+        (payment) =>
+          ["pending", "initiated"].includes(
+            String(payment.status || "").toLowerCase(),
+          ) &&
+          !payment.archived &&
+          !payment.archivedAt,
+      ),
+      paymentRows = visiblePays
         .map((x) => {
           const q = req.find((r) => r.id === x.requestId) || {},
-            learner =
-              (state.data.users || []).find((user) => user.id === x.userId) ||
-              {},
+            learner = users.find((user) => user.id === x.userId) || {},
             serviceName =
               x.serviceType === "results"
                 ? "Academic results"
                 : x.serviceType === "refer"
                   ? "Refer registration"
                   : q.title || "Paper order",
-            serviceId = x.resultRequestId || x.referRequestId;
-          return `<tr><td>${new Date(x.createdAt).toLocaleString()}</td>${admin ? `<td>${esc(q.studentName || learner.name || "—")}</td>` : ""}<td>${esc(serviceName)}${serviceId ? `<small class="muted service-ref"> · ${esc(serviceId.slice(0, 8))}</small>` : ""}</td><td>KSh ${x.amount}</td><td>${esc(x.phone)}</td><td>${status(x.status)}</td><td>${esc(x.receipt || "—")}${x.receipt ? ` <button class="icon" data-copy="${esc(x.receipt)}">Copy</button> <button class="icon" data-receipt="${x.id}">Print</button>` : ""}</td></tr>`;
+            serviceId = x.resultRequestId || x.referRequestId,
+            payerName = x.payerName || "unavailable",
+            payerNameSource = x.payerNameSource,
+            payerPhone = x.paidPhone || "—",
+            transactionTime = x.paidAt,
+            source = x.paidAtSource,
+            confirmation = x.confirmationSource,
+            reconciliationStatus = x.reconciliationStatus,
+            websiteIdentity =
+              [
+                learner.name ||
+                  q.studentName ||
+                  (state.user?.id === x.userId ? state.user.name : ""),
+                learner.username ||
+                (state.user?.id === x.userId ? state.user.username : "")
+                  ? `@${learner.username || state.user.username}`
+                  : "",
+                learner.email ||
+                  (state.user?.id === x.userId ? state.user.email : ""),
+              ]
+                .filter(Boolean)
+                .join(" · ") || "—",
+            receiptLink =
+              x.status === "success"
+                ? `<a class="icon receipt-link" href="/api/payments/${encodeURIComponent(x.id)}/receipt" download>Download PDF receipt</a>`
+                : "",
+            archived = Boolean(x.archived || x.archivedAt || x.isArchived);
+          return `<tr class="${archived ? "archived-row" : ""}"><td>${esc(formatNairobi(transactionTime))}<small class="muted payment-meta">Paid-time source: ${esc(metaLabel(source))}</small></td>${admin ? `<td><b>Website registration</b><small class="muted payment-meta">${esc(websiteIdentity)}</small><b class="payer-label">M-Pesa payer</b><small class="muted payment-meta">${esc(payerName)}</small><small class="muted payment-meta">Name source: ${esc(metaLabel(payerNameSource))}</small></td>` : `<td><b>Website registration</b><small class="muted payment-meta">${esc(websiteIdentity)}</small><b class="payer-label">M-Pesa payer</b><small class="muted payment-meta">${esc(payerName)}</small><small class="muted payment-meta">Name source: ${esc(metaLabel(payerNameSource))}</small></td>`}<td>${esc(serviceName)}${serviceId ? `<small class="muted service-ref"> · ${esc(String(serviceId).slice(0, 8))}</small>` : ""}</td><td>KSh ${esc(String(x.amount ?? "—"))}</td><td>${esc(payerPhone)}</td><td>${status(x.status)}<small class="muted payment-meta">Confirmation source: ${esc(metaLabel(confirmation))}</small><small class="muted payment-meta">Reconciliation: ${esc(metaLabel(reconciliationStatus))}</small></td><td>${esc(x.receipt || "—")}${x.receipt ? ` <button class="icon" data-copy="${esc(x.receipt)}">Copy</button>` : ""}${receiptLink}</td><td>${archived ? `<button class="icon" data-archive-type="payment" data-archive-id="${esc(x.id)}" data-archive-action="restore">Restore</button>` : `<button class="icon" data-archive-type="payment" data-archive-id="${esc(x.id)}" data-archive-action="archive">Archive</button>`}${admin && ["pending", "initiated"].includes(String(x.status || "").toLowerCase()) && !archived ? ` <button class="icon" data-reconcile-payment="${esc(x.id)}">Reconcile</button>` : ""}</td></tr>`;
         })
-        .join("") || '<tr><td colspan="7">No payments recorded.</td></tr>'
-    }</table></div></div>`;
+        .join("");
+    return `<div class="welcome"><div><h1>${admin ? "Transactions" : "Payments & Transaction History"}</h1><p class="muted">Payment records show website registration and payer details separately. PDF receipts are available for confirmed payments.</p></div></div>${admin ? adminCharts(pays, req) : ""}${
+      admin
+        ? `<div class="panel"><h2>Total received: KSh ${pays
+            .filter((x) => x.status === "success")
+            .reduce((t, x) => t + Number(x.amount || 0), 0)
+            .toLocaleString()}</h2><p class="muted">Today: KSh ${pays
+            .filter(
+              (x) =>
+                x.status === "success" &&
+                new Date(x.paidAt || x.createdAt).toDateString() ===
+                  new Date().toDateString(),
+            )
+            .reduce((t, x) => t + Number(x.amount || 0), 0)
+            .toLocaleString()} · ${pays.filter((x) => x.status === "success").length} successful payments</p><div class="payment-tools"><input id="txSearch" placeholder="Search payer, student, service or receipt code" aria-label="Search transactions"><button class="btn" type="button" id="resetTxSearch">Start fresh</button><button class="btn" type="button" id="reconcile">Refresh pending/initiated attempts (${pendingPayments.length})</button></div><p class="muted">Reconciliation checks pending attempts only; it does not confirm or mark a payment as paid.</p><form id="manualPay" class="form-grid"><div class="field"><label>Unpaid paper request</label><select name="requestId" required>${req
+            .filter(
+              (r) =>
+                r.status !== "paid" &&
+                r.paperId &&
+                !r.archived &&
+                !r.archivedAt,
+            )
+            .map(
+              (r) =>
+                `<option value="${esc(r.id)}">${esc(r.studentName || "Learner")} – ${esc(r.title || "Paper")} (KSh ${esc(String(r.amount ?? "—"))})</option>`,
+            )
+            .join(
+              "",
+            )}</select></div><div class="field"><label>Receipt code (verified against transaction evidence)</label><input name="receipt" required maxlength="80" autocomplete="off"></div><div class="field"><label>Payer phone shown in evidence</label><input name="payerPhone" type="tel" required maxlength="32" placeholder="Phone shown on transaction"></div><div class="field"><label>Transaction time (optional, EAT)</label><input name="paidAt" type="datetime-local"><small class="muted">Enter only if visible in evidence. This local time is sent with the EAT +03:00 offset.</small></div><div class="field full"><label class="verify-name"><input type="checkbox" id="payerNameVerified"> I can verify the payer name from transaction evidence</label><input name="payerName" id="payerNameInput" maxlength="100" placeholder="Verified payer name (optional)" disabled></div><div class="full"><button class="btn">Record verified manual payment</button></div></form></div>`
+        : ""
+    }<div class="panel"><h2>Payment records</h2><div class="table-wrap"><table><tr><th>Transaction time / source</th><th>${admin ? "Website and payer identity" : "Payer identity"}</th><th>Service</th><th>Amount</th><th>Payer phone</th><th>Confirmation / reconciliation</th><th>Receipt / PDF</th><th>Record actions</th></tr>${paymentRows || `<tr><td colspan="8" class="muted">No payments recorded.</td></tr>`}</table></div></div>`;
+  }
   if (title === "Security")
     return `<div class="welcome"><div><h1>${d.user.mustChangePassword ? "Set a new password" : "Account security"}</h1><p class="muted">${d.user.mustChangePassword ? "Your administrator issued a temporary password. Choose a new password to unlock the portal." : "Rotate your password; your current session will be signed out afterward."}</p></div></div><div class="panel"><form id="passwordForm" class="form-grid">${d.user.mustChangePassword ? "" : `<div class="field"><label>Current password</label><input name="currentPassword" type="password" autocomplete="current-password" required></div>`}<div class="field"><label>New password (12 characters minimum)</label><input name="newPassword" type="password" minlength="12" autocomplete="new-password" required></div><div class="field"><label>Confirm new password</label><input name="confirmPassword" type="password" minlength="12" autocomplete="new-password" required></div><div class="full"><button class="btn">${d.user.mustChangePassword ? "Set new password" : "Change password"}</button></div></form></div>`;
   if (title === "My Profile")
@@ -346,7 +427,7 @@ function paperCard(p, admin) {
     (state.data.requests || []).some(
       (r) => r.paperId === p.id && r.status === "paid",
     );
-  return `<article class="paper"><div class="paper-kicker">${esc(p.type)} · ${esc(p.level || "All levels")}</div><h3>📄 ${esc(p.title)}</h3><div class="muted">${esc(p.subject)} · ${esc(p.year || "Current")}</div><p>${esc(p.description || "Revision material available for learners.")}</p><b>KSh ${p.price}</b> <small class="muted">· ⬇ ${p.downloads || 0}</small>${Date.now() - new Date(p.createdAt) < 6048e5 ? ' <span class="newtag">NEW</span>' : ""}${p.available ? "" : ' <small class="muted">(archived)</small>'}<br>${admin ? "" : `<button class="icon" data-fav="${p.id}">${(state.data.favorites || []).includes(p.id) ? "♥ Saved" : "♡ Save"}</button> <a class="icon" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(p.title + " – " + location.origin)}">Share</a><br>`}${admin ? `<div class="row-actions"><button class="btn" data-edit="${p.id}">Rename / Edit</button> <button class="btn" data-toggle="${p.id}">${p.available ? "Archive" : "Restore"}</button> <button class="btn" data-del="${p.id}">Delete</button></div>` : own ? `<button class="btn" data-download="${p.id}">Download</button>` : `<button class="btn" data-buy="${p.id}">Buy &amp; download</button>`}</article>`;
+  return `<article class="paper"><div class="paper-kicker">${esc(p.type)} · ${esc(p.level || "All levels")}</div><h3>📄 ${esc(p.title)}</h3><div class="muted">${esc(p.subject)} · ${esc(p.year || "Current")}</div><p>${esc(p.description || "Revision material available for learners.")}</p><b>KSh ${p.price}</b> <small class="muted">· ⬇ ${p.downloads || 0}</small>${Date.now() - new Date(p.createdAt) < 6048e5 ? ' <span class="newtag">NEW</span>' : ""}${p.available ? "" : ' <small class="muted">(archived)</small>'}<br>${admin ? "" : `<button class="icon" data-fav="${p.id}">${(state.data.favorites || []).includes(p.id) ? "♥ Saved" : "♡ Save"}</button> <a class="icon" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(p.title + " – " + location.origin)}">Share</a><br>`}${admin ? `<div class="row-actions"><button class="btn" data-edit="${p.id}">Rename / Edit</button> <button class="btn" data-catalog-paper-archive="${esc(p.id)}" data-archive-action="${p.available ? "archive" : "restore"}">${p.available ? "Archive" : "Restore"}</button> <button class="btn" data-del="${p.id}">Delete</button></div>` : own ? `<button class="btn" data-download="${p.id}">Download</button>` : `<button class="btn" data-buy="${p.id}">Buy &amp; download</button>`}</article>`;
 }
 function applyFilter(l) {
   const f = state.f || (state.f = { subject: "", sort: "new", saved: false });
@@ -368,7 +449,7 @@ function filterBar(ps) {
   const f = state.f || (state.f = { subject: "", sort: "new", saved: false }),
     o = (v, t) =>
       `<option value="${v}" ${f.sort === v ? "selected" : ""}>${t}</option>`;
-  return `<div class="filters"><select id="fSubject"><option value="">All subjects</option>${[...new Set(ps.map((p) => p.subject))].map((s) => `<option ${f.subject === s ? "selected" : ""}>${esc(s)}</option>`).join("")}</select><select id="fSort">${o("new", "Newest")}${o("cheap", "Cheapest")}${o("popular", "Most downloaded")}</select><label class="chk"><input type="checkbox" id="fSaved" ${f.saved ? "checked" : ""}> ♥ Saved</label></div>`;
+  return `<div class="filters"><select id="fSubject"><option value="">All subjects</option>${[...new Set(ps.map((p) => p.subject))].map((s) => `<option ${f.subject === s ? "selected" : ""}>${esc(s)}</option>`).join("")}</select><select id="fSort">${o("new", "Newest")}${o("cheap", "Cheapest")}${o("popular", "Most downloaded")}</select><label class="chk"><input type="checkbox" id="fSaved" ${f.saved ? "checked" : ""}> ♥ Saved</label><button class="icon" type="button" id="resetFilters">Start fresh</button></div>`;
 }
 function adminCharts(pays, req) {
   const days = [...Array(7)].map((_, i) => {
@@ -405,26 +486,199 @@ function adminCharts(pays, req) {
   return `<div class="panel"><h2>Payments received</h2>${feed}</div><div class="panel"><h2>Last 7 days</h2><div class="bars">${sums.map((v, i) => `<div class="bar"><b>${v}</b><i style="height:${Math.round((v / max) * 100)}%"></i><small>${days[i].toLocaleDateString(undefined, { weekday: "short" })}</small></div>`).join("")}</div><h2>Top sellers</h2>${t.map(([n, c]) => `<p>${esc(n)} — ${c} sold</p>`).join("") || '<p class="muted">No sales yet.</p>'}<a class="btn" href="/api/admin/export/payments">Export CSV</a></div>`;
 }
 function wire(admin) {
+  if (admin) {
+    const paymentHeading = [...document.querySelectorAll(".panel h2")].find(
+        (heading) => heading.textContent === "Payment records",
+      ),
+      paymentPanel = paymentHeading?.closest(".panel"),
+      tableWrap = paymentPanel?.querySelector(".table-wrap");
+    if (paymentPanel && tableWrap) {
+      const reviewTools = document.createElement("div"),
+        select = document.createElement("select"),
+        verifyButton = document.createElement("button"),
+        unresolved = (state.data?.payments || []).filter(
+          (payment) =>
+            ["initiated", "pending", "review_required", "failed"].includes(
+              payment.status,
+            ) && !payment.archivedAt,
+        );
+      reviewTools.className = "payment-tools manual-review-tools";
+      select.id = "verifyPaymentId";
+      select.setAttribute("aria-label", "Payment attempt to verify");
+      for (const payment of unresolved) {
+        const option = document.createElement("option");
+        option.value = payment.id;
+        option.textContent = `${payment.status} · KSh ${payment.amount} · ${payment.receipt || payment.id.slice(0, 8)}`;
+        select.append(option);
+      }
+      if (!unresolved.length) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "No unresolved payment attempts";
+        select.append(option);
+      }
+      verifyButton.type = "button";
+      verifyButton.className = "btn";
+      verifyButton.textContent = "Verify from M-Pesa evidence";
+      verifyButton.disabled = !unresolved.length;
+      verifyButton.onclick = async () => {
+        const payment = unresolved.find((item) => item.id === select.value),
+          receipt = prompt(
+            "Enter the M-Pesa receipt code exactly as shown in transaction evidence:",
+            payment?.receipt || "",
+          );
+        if (receipt === null) return;
+        const amount = prompt(
+          "Enter the exact amount shown in M-Pesa evidence:",
+          String(payment?.amount || ""),
+        );
+        if (amount === null) return;
+        const payerPhone = prompt(
+          "Enter the actual payer phone shown in transaction evidence:",
+        );
+        if (!payerPhone) return;
+        const payerName = confirm(
+          "Can you verify the payer name from M-Pesa transaction evidence? Choose Cancel if unavailable.",
+        )
+          ? prompt("Enter the verified payer name:") || ""
+          : "";
+        const paidAt = prompt(
+          "Transaction time from evidence (optional). Enter ISO 8601 with timezone, e.g. 2026-11-22T08:40:00+03:00:",
+          "",
+        );
+        if (paidAt === null) return;
+        verifyButton.disabled = true;
+        try {
+          await api("/api/admin/payments/verify", {
+            method: "POST",
+            body: JSON.stringify({
+              paymentId: payment.id,
+              receipt,
+              amount,
+              payerPhone,
+              ...(payerName ? { payerName } : {}),
+              ...(paidAt ? { paidAt } : {}),
+            }),
+          });
+          toast(
+            "Payment verified from evidence; receipt and request status updated.",
+          );
+          await load();
+        } catch (error) {
+          toast(error.message);
+          if (verifyButton.isConnected) verifyButton.disabled = false;
+        }
+      };
+      reviewTools.append(select, verifyButton);
+      paymentPanel.insertBefore(reviewTools, tableWrap);
+    }
+  }
   document.querySelector("#txSearch")?.addEventListener("input", (e) => {
     const q = e.target.value.toLowerCase();
-    document.querySelectorAll(".table-wrap tr").forEach((tr) => {
+    document.querySelectorAll(".panel .table-wrap tr").forEach((tr) => {
       if (!tr.querySelector("th"))
         tr.style.display = tr.textContent.toLowerCase().includes(q)
           ? ""
           : "none";
     });
   });
-  document.querySelector("#reconcile")?.addEventListener("click", async () => {
-    const u = (state.data.requests || []).filter(
-      (r) => r.status !== "paid" && r.paperId,
-    );
-    for (const r of u) {
+  document.querySelector("#resetTxSearch")?.addEventListener("click", () => {
+    const search = document.querySelector("#txSearch");
+    if (search) search.value = "";
+    document.querySelectorAll(".panel .table-wrap tr").forEach((tr) => {
+      tr.style.display = "";
+    });
+  });
+  document
+    .querySelector("#reconcile")
+    ?.addEventListener("click", async (event) => {
+      event.currentTarget.disabled = true;
       try {
-        await api("/api/payments/status/" + r.id);
-      } catch {}
-    }
-    toast("Checked " + u.length + " pending request(s).");
-    await load();
+        const result = await api("/api/admin/payments/reconcile", {
+          method: "POST",
+          body: JSON.stringify({}),
+        });
+        toast(
+          result.message ||
+            `Checked ${result.checked ?? result.count ?? "pending"} pending attempt(s). No payment was confirmed by this refresh.`,
+        );
+        await load();
+      } catch (error) {
+        toast(error.message);
+      } finally {
+        if (event.currentTarget?.isConnected)
+          event.currentTarget.disabled = false;
+      }
+    });
+  document.querySelectorAll("[data-reconcile-payment]").forEach((button) => {
+    button.onclick = async () => {
+      button.disabled = true;
+      try {
+        const result = await api("/api/admin/payments/reconcile", {
+          method: "POST",
+          body: JSON.stringify({ paymentId: button.dataset.reconcilePayment }),
+        });
+        toast(
+          result.message ||
+            "Pending attempt checked; reconciliation does not confirm payment.",
+        );
+        await load();
+      } catch (error) {
+        toast(error.message);
+      } finally {
+        if (button.isConnected) button.disabled = false;
+      }
+    };
+  });
+  document
+    .querySelectorAll("[data-catalog-paper-archive]")
+    .forEach((button) => {
+      button.onclick = async () => {
+        button.disabled = true;
+        try {
+          await api("/api/admin/papers/update", {
+            method: "POST",
+            body: JSON.stringify({
+              paperId: button.dataset.catalogPaperArchive,
+              available: button.dataset.archiveAction === "restore",
+            }),
+          });
+          toast(
+            button.dataset.archiveAction === "restore"
+              ? "Paper restored."
+              : "Paper archived.",
+          );
+          await load();
+        } catch (error) {
+          toast(error.message);
+          if (button.isConnected) button.disabled = false;
+        }
+      };
+    });
+  document.querySelectorAll("[data-archive-type]").forEach((button) => {
+    button.onclick = async () => {
+      const {
+        archiveType: type,
+        archiveId: id,
+        archiveAction: action,
+      } = button.dataset;
+      button.disabled = true;
+      try {
+        await api("/api/records/archive", {
+          method: "POST",
+          body: JSON.stringify({ type, id, action }),
+        });
+        toast(
+          action === "archive"
+            ? "Record archived. You can restore it while archived items are included."
+            : "Record restored.",
+        );
+        await load();
+      } catch (error) {
+        toast(error.message);
+        if (button.isConnected) button.disabled = false;
+      }
+    };
   });
   const fl = state.f || (state.f = { subject: "", sort: "new", saved: false });
   document.querySelector("#fSubject")?.addEventListener("change", (e) => {
@@ -437,6 +691,12 @@ function wire(admin) {
   });
   document.querySelector("#fSaved")?.addEventListener("change", (e) => {
     fl.saved = e.target.checked;
+    render();
+  });
+  document.querySelector("#resetFilters")?.addEventListener("click", () => {
+    state.f = { subject: "", sort: "new", saved: false };
+    const globalSearch = document.querySelector("#search");
+    if (globalSearch) globalSearch.value = "";
     render();
   });
   document.querySelectorAll("[data-fav]").forEach(
@@ -462,20 +722,6 @@ function wire(admin) {
         toast("M-Pesa code copied.");
       }),
   );
-  document.querySelectorAll("[data-receipt]").forEach(
-    (b) =>
-      (b.onclick = () => {
-        const p = state.data.payments.find((x) => x.id === b.dataset.receipt),
-          q = state.data.requests.find((r) => r.id === p.requestId) || {},
-          w = window.open("", "_blank");
-        if (!w) return;
-        w.document.write(
-          `<title>Receipt</title><body style="font-family:sans-serif;padding:24px"><h2>${esc(state.data.settings.portalName)} – Receipt</h2><p>Paper: ${esc(q.title || "")}</p><p>Student: ${esc(q.studentName || "")}</p><p>Amount: KSh ${p.amount}</p><p>M-Pesa code: <b>${esc(p.receipt)}</b></p><p>Date: ${new Date(p.createdAt).toLocaleString()}</p>`,
-        );
-        w.document.close();
-        w.print();
-      }),
-  );
   document
     .querySelectorAll("[data-buy]")
     .forEach((b) => (b.onclick = () => buy(b.dataset.buy)));
@@ -499,22 +745,7 @@ function wire(admin) {
         }
       }),
   );
-  document.querySelectorAll("[data-toggle]").forEach(
-    (b) =>
-      (b.onclick = async () => {
-        const p = state.data.papers.find((x) => x.id === b.dataset.toggle);
-        try {
-          await api("/api/admin/papers/update", {
-            method: "POST",
-            body: JSON.stringify({ paperId: p.id, available: !p.available }),
-          });
-          toast(p.available ? "Paper archived." : "Paper restored.");
-          await load();
-        } catch (e) {
-          toast(e.message);
-        }
-      }),
-  );
+
   document.querySelectorAll("[data-del]").forEach(
     (b) =>
       (b.onclick = async () => {
@@ -532,10 +763,27 @@ function wire(admin) {
       }),
   );
   document
+    .querySelector("#payerNameVerified")
+    ?.addEventListener("change", (event) => {
+      const input = document.querySelector("#payerNameInput");
+      if (!input) return;
+      input.disabled = !event.target.checked;
+      if (!event.target.checked) input.value = "";
+      if (event.target.checked) input.focus();
+    });
+  document
     .querySelector("#manualPay")
     ?.addEventListener("submit", async (e) => {
       e.preventDefault();
       const f = Object.fromEntries(new FormData(e.target));
+      if (!document.querySelector("#payerNameVerified")?.checked)
+        delete f.payerName;
+      if (f.paidAt) {
+        if (f.paidAt.length === 16) f.paidAt += ":00";
+        f.paidAt += "+03:00";
+      } else {
+        delete f.paidAt;
+      }
       try {
         await api("/api/admin/payments/manual", {
           method: "POST",
@@ -755,24 +1003,35 @@ function wire(admin) {
       const serviceType = button.dataset.serviceManual,
         collection =
           serviceType === "results"
-            ? state.data.resultRequests
-            : state.data.referRequests,
+            ? state.data.resultRequests || []
+            : state.data.referRequests || [],
         request = collection.find(
           (item) => item.id === button.dataset.requestId,
         ),
         receipt = prompt(
-          "Verify the M-Pesa transaction and enter its receipt code:",
+          "Verify transaction evidence and enter the receipt code:",
         );
       if (!receipt) return;
       const amount = prompt(
-        "Enter the exact M-Pesa amount received:",
+        "Enter the exact amount shown in transaction evidence:",
         String(request?.serviceFee || ""),
       );
       if (amount === null) return;
-      const phone = prompt(
-        "Enter the payer's M-Pesa phone number shown in the transaction:",
+      const payerPhone = prompt(
+        "Enter the payer phone shown in transaction evidence:",
       );
-      if (!phone) return;
+      if (!payerPhone) return;
+      const verifyName = confirm(
+        "Can you verify the payer's name from transaction evidence? Choose Cancel if not.",
+      );
+      const payerName = verifyName
+        ? prompt("Enter the verified payer name:") || ""
+        : "";
+      const paidAt =
+        prompt(
+          "Transaction time from evidence (optional; leave blank if unavailable). Enter ISO 8601 including timezone, e.g. 2026-11-22T08:40:00+03:00:",
+          "",
+        ) || "";
       try {
         await api("/api/admin/payments/service-manual", {
           method: "POST",
@@ -781,7 +1040,9 @@ function wire(admin) {
             requestId: button.dataset.requestId,
             receipt,
             amount,
-            phone,
+            payerPhone,
+            ...(payerName ? { payerName } : {}),
+            ...(paidAt ? { paidAt } : {}),
           }),
         });
         toast("Payment recorded; service processing is unlocked.");
@@ -1256,27 +1517,38 @@ async function pay(requestId) {
   setInterval(async () => {
     if (
       document.hidden ||
-      state.user?.role !== "admin" ||
-      !["Transactions", "Payment Reports", "Requests & Orders"].includes(
-        state.tab,
-      )
+      !state.user ||
+      ![
+        "Transactions",
+        "Payment Reports",
+        "Requests & Orders",
+        "Payments",
+        "Transaction History",
+      ].includes(state.tab)
     )
       return;
-    const n = (state.data?.payments || []).filter(
-      (p) => p.status === "success",
-    ).length;
+    const priorSuccesses = new Set(
+      (state.data?.payments || [])
+        .filter((payment) => payment.status === "success")
+        .map((payment) => payment.id),
+    );
     try {
       await load();
     } catch {
       return;
     }
-    if (
-      (state.data?.payments || []).filter((p) => p.status === "success")
-        .length > n
-    ) {
-      toast("💰 New payment received!");
-      beep();
-      document.title = "💰 New payment · Papers Portal";
+    const newSuccess = (state.data?.payments || []).some(
+      (payment) =>
+        payment.status === "success" && !priorSuccesses.has(payment.id),
+    );
+    if (newSuccess) {
+      toast(
+        state.user?.role === "admin"
+          ? "New successful payment received."
+          : "Your payment confirmation has been updated.",
+      );
+      if (state.user?.role === "admin") beep();
+      document.title = "New payment · Papers Portal";
     }
   }, 30000);
 })();
@@ -1306,7 +1578,7 @@ function showReady(s, paperId) {
   document.querySelector(".ready")?.remove();
   const o = document.createElement("div");
   o.className = "ready";
-  o.innerHTML = `<div class="ready-card"><div style="font-size:46px">✅</div><h2>Payment received</h2><p>${s.receipt ? "M-Pesa code: <b>" + esc(s.receipt) + "</b><br>" : ""}KSh ${esc(String(s.amount || ""))} paid. Your paper is ready.</p><a class="btn" href="/api/download/${paperId}">Download now</a> <button class="icon" id="rdClose">Close</button></div>`;
+  o.innerHTML = `<div class="ready-card"><div style="font-size:46px">✅</div><h2>Payment received</h2><p>${s.receipt ? "M-Pesa code: <b>" + esc(s.receipt) + "</b><br>" : ""}KSh ${esc(String(s.amount || ""))} paid. Your paper is ready.</p><a class="btn" href="/api/download/${encodeURIComponent(paperId || "")}">Download now</a>${s.paymentId ? ` <a class="icon" href="/api/payments/${encodeURIComponent(s.paymentId)}/receipt" download>Download PDF receipt</a>` : ""} <button class="icon" id="rdClose">Close</button></div>`;
   document.body.appendChild(o);
   o.querySelector("#rdClose").onclick = () => o.remove();
   o.onclick = (e) => {

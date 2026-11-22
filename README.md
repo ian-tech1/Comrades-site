@@ -14,7 +14,7 @@ A responsive revision-paper portal with learner and administrator accounts, paid
 
 ## Quick start
 
-1. Run the complete `supabase/schema.sql` in the SQL Editor of the Supabase project you plan to use. Confirm the private `papers` bucket is present. The migration also creates a private `avatars` bucket for learner profile photos, served only through authenticated short-lived signed URLs; do not make either bucket public.
+1. For a **new, empty Supabase project only**, use `supabase/schema.sql` as the full schema reference. For an existing portal, do **not** rerun the full schema; identify the applied migration history and follow the reviewed, versioned steps in [DEPLOYMENT.md](DEPLOYMENT.md). Confirm the private `papers` bucket is present. The schema creates a private `avatars` bucket for learner profile photos, served only through authenticated short-lived signed URLs; do not make either bucket public.
 2. Configure the environment variables in Vercel as described in [DEPLOYMENT.md](DEPLOYMENT.md). Keep Supabase and Daraja credentials in server-side environment variables only.
 3. Deploy the repository root to Vercel with Node.js 22 or later. The build command is `npm run build`; it runs syntax, regression, and formatting checks.
 4. Visit `/api/health`. A successful response reports `ok: true`, `database: "Supabase"`, and `storage: true`.
@@ -32,7 +32,7 @@ Daraja callback requests include a high-entropy `DARAJA_CALLBACK_TOKEN` in the c
 
 ## Operational notes
 
-- Run the **entire** `supabase/schema.sql` in the exact Supabase project named by `SUPABASE_URL`; `/api/health` lists missing tables/columns.
+- For existing installations, apply only the appropriate reviewed migration to the exact Supabase project named by `SUPABASE_URL`; use the full schema only for a new empty project. `/api/health` lists missing tables/columns.
 - Do not set `DATABASE_URL` or `NEON_DATABASE_URL`; this version uses Supabase APIs only.
 - Set production payment credentials only in the Vercel Production environment. Avoid live credentials in Preview deployments.
 - See [DEPLOYMENT.md](DEPLOYMENT.md) for environment variables, Vercel project settings, health checks, and smoke-test steps.

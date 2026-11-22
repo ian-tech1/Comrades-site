@@ -72,7 +72,7 @@ test("status-query responses cannot unlock payments and receipts are unique", as
       'if (method === "GET" && path.startsWith("/api/payments/status/"))',
     ),
     statusEnd = api.indexOf(
-      'if (method === "POST" && path === "/api/admin/papers/update")',
+      'if (method === "POST" && path === "/api/admin/payments/reconcile")',
       statusStart,
     ),
     statusRoute = api.slice(statusStart, statusEnd);
@@ -82,7 +82,7 @@ test("status-query responses cannot unlock payments and receipts are unique", as
   assert.match(api, /if \(valid && updatedPayment\)/);
   assert.match(
     schema,
-    /create unique index if not exists payments_receipt_unique_idx on public\.payments\(receipt\) where receipt is not null;/i,
+    /create unique index if not exists payments_receipt_normalized_unique_idx on public\.payments\(upper\(btrim\(receipt\)\)\) where receipt is not null;/i,
   );
 });
 

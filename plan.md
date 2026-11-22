@@ -56,31 +56,31 @@ Three intentionally low-probability alternatives considered: a dense institution
 
 ## Technical structure
 
-- `public/` will contain the responsive application shell, catalog/dashboard UI, accessible style system, route manifest, web manifest, and browser-side API client.
-- `api/index.js` is the canonical Vercel API handler for account sessions, catalog searches, requests, notifications, favorites, paper management, signed uploads, protected downloads, analytics, CSV export, and Daraja STK/callback handlers; `vercel.json` rewrites `/api/*` requests into this handler.
-- `api/db.js` will preserve a server-only Supabase service-role client.
-- `supabase/schema.sql` will become an idempotent migration safe for an existing portal database, adding only the new fields/tables/indexes required by the upgrade.
-- `.env.example`, `README.md`, and `DEPLOYMENT.md` will document every Vercel environment variable, the required Supabase migration, Daraja sandbox verification, production activation, and health checks.
-- `package.json` will provide local Vercel development and lightweight validation scripts without embedding secrets.
+- `public/` contains the responsive application shell, catalog/dashboard UI, accessible style system, route manifest, web manifest, and browser-side API client.
+- `api/index.js` is the canonical Vercel API handler for account sessions, catalog searches, requests, notifications, favorites, paper management, signed uploads, protected downloads, analytics, CSV export, and Daraja STK/callback handlers.
+- `api/db.js` preserves a server-only Supabase service-role client; `api/payment-proof.js` enforces callback matching.
+- `supabase/schema.sql` is the idempotent source of schema for local setup; production changes are delivered as separately named incremental migrations after target/history checks.
+- `.env.example`, `README.md`, and `DEPLOYMENT.md` document environment variables, migration order, Daraja verification, deployment and health checks.
+- `package.json` provides local development and lightweight validation scripts without embedding secrets.
 
 ## Build workflow
 
-1. Copy the supplied Vercel/Supabase project into the managed workspace and retain the Vercel function layout.
-2. Implement the database migration and server API changes, including signed upload, secure download, notifications, audit data, and Daraja callback reconciliation.
+1. Continue in the existing `ian-tech1/Comrades-site` repository on `main` without changing GitHub identity or credentials.
+2. Implement reviewed additive schema changes and server API changes, including signed upload, secure download, notifications, audit data, and Daraja callback reconciliation.
 3. Rebuild the browser interface and responsive styling around the enhanced student and administrator workflows.
 4. Add deployment documentation, Vercel environment templates, a route manifest, and local validation scripts.
-5. Run syntax checks and a local Vercel development smoke check with placeholder configuration only. No production payment, Supabase write, or M-Pesa STK prompt will be attempted.
+5. Run syntax checks and a local Vercel development smoke check with placeholder configuration only. No production payment, Supabase data mutation, or M-Pesa STK prompt is attempted during that original phase.
 6. Package the finished Vercel-ready project as a ZIP and provide the exact deployment steps for Vercel and Supabase.
 
 ## Constraints
 
-A live M-Pesa STK Push cannot be initiated or verified without actual Daraja credentials and an externally reachable deployed callback URL. Payment confirmation also relies on Safaricom’s asynchronous callback. Administrators must run the updated `supabase/schema.sql` in the selected Supabase project and add the documented environment variables in Vercel before production use.
+No Daraja credentials or Vercel production configuration are available in this repository checkout, so this task cannot run a live M-Pesa prompt, deploy the application, or validate Safaricom delivery end to end. The linked Supabase project was confirmed as the intended Comreds portal by its matching `profiles`, `paper_requests`, `payments`, `payment_events`, `result_requests`, and portal migration history. Reviewed v16.4 setup/uniqueness and v16.5 provenance/archive migrations were applied; v16.5.1 and v16.5.2 were applied only after bounded duplicate/orphan preflights. The v16.5.3 archive/STK locking migration was applied and its ledger entry, payment guard trigger, and service-role-only RPC execution (with authenticated execution denied) were verified. Existing financial rows were not deleted or rewritten.
 
 ## 2026-11-22 — learner service, pricing, profile and account-recovery upgrade
 
 ### Scope and implementation approach
 
-Keep the existing Vercel Functions + Supabase server-only service-role architecture and the existing Daraja STK/callback implementation. Add a separate supplementary/refer registration request record for failed exams, retain the existing private results-request workflow, and extend payment records with nullable references to academic service requests. Each academic request snapshots its configured fee when submitted; the server, not the browser, chooses the price and verifies owner, amount, payer phone and receipt before recording payment. Paper purchases keep their current request/payment behavior. Additive, idempotent Supabase SQL updates are required before deploying this code; do not write to the live database from this task.
+Keep the existing Vercel Functions + Supabase server-only service-role architecture and the existing Daraja STK/callback implementation. Add a separate supplementary/refer registration request record for failed exams, retain the existing private results-request workflow, and extend payment records with nullable references to academic service requests. Each academic request snapshots its configured fee when submitted; the server, not the browser, chooses the price and verifies owner, amount, payer phone and receipt before recording payment. Paper purchases keep their current request/payment behavior. Additive, idempotent Supabase SQL changes must be applied only to the confirmed project, in reviewed stages, before deploying this code.
 
 Add administrator-controlled prices for paper defaults, results requests, and supplementary/refer registrations under System Settings. Learners can view and pay each service request through the same M-Pesa flow, see payment/request status, and retry eligible failures. Admins can review and progress each service request. Payment success and service-status changes produce notifications and audit entries.
 
@@ -122,4 +122,31 @@ Reuse the current premium academic command-center style: keep the navy rail, bri
 
 ### Material constraints
 
-No email provider, live Supabase credentials, or live Daraja credentials are supplied in this checkout. The code and migration can be prepared and tested locally; production readiness requires applying the full schema in the correct Supabase project and deploying the updated repository. Do not trigger a live M-Pesa payment or claim that the remote database is migrated.
+No email provider, Daraja credentials, or Vercel production configuration are present in this checkout. The linked Supabase project has now been verified as the intended portal from its schema and migration history. Production readiness still requires Vercel configuration/deployment and a sandbox callback test; do not trigger a real M-Pesa payment.
+
+## 2026-11-22 — payment proof, downloadable receipts and safe records hygiene
+
+### Implementation approach
+
+Extend each payment with the Safaricom callback transaction timestamp, actual payer phone, optional payer name plus its evidence source, confirmation source, reconciliation state, and archive metadata. Generate a small server-side PDF receipt for each confirmed payment using the existing session and payment-owner authorization; do not persist a duplicate receipt file or expose service-role credentials. Include the portal account identity, linked service/request, amount, M-Pesa receipt, payer phone/name provenance and transaction time. A payment name is shown as unavailable unless a verified external field or an administrator-verified M-Pesa record supplied it. Do not treat the prompted phone as the registered payer name.
+
+Improve the callback path to preserve successful evidence, parse the callback's transaction date, report proof mismatches, prevent duplicate receipt assignment, and retain callback events for reconciliation. Add an administrator reconciliation action for pending STK requests that records the provider query result but does not mark a payment paid from a status query alone; full payment requires a matching receipt, amount and payer phone from an authenticated callback or an audited administrator verification. Let administrators enter an actual payer name, payer phone and transaction time only when they have checked an M-Pesa receipt/statement, and record that source in audit history.
+
+Use archive/hide/restore metadata for paper, results and refer requests and payment records. The ordinary delete action can remove an unconfirmed request only when no payment attempt references it and must preserve a deletion audit record. Confirmed financial ledger rows are never hard-deleted. Add a visible refresh action, last-refreshed time, filter reset and an archived-record toggle. Keep archived state in the dashboard API and audit every archive/restore operation.
+
+### Ten additional advanced upgrades
+
+1. Automatically available downloadable PDF receipts for a confirmed payment, visible to its learner and portal administrators.
+2. Transaction-date capture from the M-Pesa callback, with the source timezone retained and system-confirmation fallback clearly labeled.
+3. Separate stored fields for registered learner identity and actual payer identity, including phone and a trustworthy name-source label.
+4. Durable idempotent callback-event recording, duplicate-receipt prevention and visible review state when successful callback proof does not match the request.
+5. An admin pending-payment reconciliation queue that checks Daraja STK Query and never treats a positive query result alone as payment proof.
+6. Audited admin verification for payments whose callback was missed, capturing the real payer phone, optional verified name, receipt, amount and payment time.
+7. Manual transaction refresh, periodic background refresh while a transaction page is open, last-refresh feedback and one-click filter reset.
+8. Archive, restore and show-archived controls for requests and payments without deleting confirmed financial history.
+9. Expanded admin CSV export with payment confirmation time, payer name/provenance, phone, receipt and archive state.
+10. Operational audit/alerts for unmatched or mismatched callbacks and regression checks for receipt ownership, duplicate handling, archive safety and reconciliation safeguards.
+
+### Project structure and constraints
+
+Keep the UI in `public/app.js` and `public/style.css`; add focused pure helpers for M-Pesa timestamps and PDF receipt bytes under `api/`; keep authorization, persistence, reconciliation, archive and callback routes in `api/index.js`; add additive payment/request columns and indexes to `supabase/schema.sql`; and extend focused tests and `DEPLOYMENT.md`. The callback format reviewed from a technical Daraja integration guide supplies `Amount`, `MpesaReceiptNumber`, `TransactionDate`, and `PhoneNumber`, but does not supply the payer's registered name. Safaricom's public API pages identify M-Pesa Express and Transaction Status as APIs without displaying full response schemas on the accessible page; live credentials and an end-to-end sandbox prompt are not present. Therefore no implementation can promise that no payment will ever be missed; the product must surface callback gaps and reconciliation work rather than falsely declaring a payment successful.

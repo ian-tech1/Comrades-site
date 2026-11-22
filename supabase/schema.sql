@@ -3,7 +3,7 @@ create extension if not exists pgcrypto;
 create table if not exists public.profiles(id uuid primary key default gen_random_uuid(),name text not null,email text not null unique,phone text default '',role text not null default 'student' check(role in('student','admin')),password_salt text not null,password_hash text not null,created_at timestamptz not null default now());
 create table if not exists public.papers(id uuid primary key default gen_random_uuid(),title text not null,subject text not null,type text not null default 'Revision Paper',description text default '',price numeric(10,2) not null default 0 check(price>=0),available boolean not null default true,storage_path text not null,original_name text not null,created_at timestamptz not null default now());
 create table if not exists public.paper_requests(id uuid primary key default gen_random_uuid(),user_id uuid not null references public.profiles(id) on delete cascade,student_name text not null,paper_id uuid references public.papers(id) on delete set null,title text not null,subject text not null,status text not null default 'requested',amount numeric(10,2) not null default 0,created_at timestamptz not null default now());
-create table if not exists public.payments(id uuid primary key default gen_random_uuid(),request_id uuid not null references public.paper_requests(id) on delete cascade,user_id uuid not null references public.profiles(id) on delete cascade,amount numeric(10,2) not null,phone text not null,status text not null default 'initiated',checkout_request_id text unique,merchant_request_id text,result_code integer,result_description text,receipt text,paid_phone text,paid_amount numeric(10,2),error_message text,created_at timestamptz not null default now());
+create table if not exists public.payments(id uuid primary key default gen_random_uuid(),request_id uuid not null references public.paper_requests(id) on delete restrict,user_id uuid not null references public.profiles(id) on delete cascade,amount numeric(10,2) not null,phone text not null,status text not null default 'initiated',checkout_request_id text unique,merchant_request_id text,result_code integer,result_description text,receipt text,paid_phone text,paid_amount numeric(10,2),error_message text,created_at timestamptz not null default now());
 create table if not exists public.notices(id uuid primary key default gen_random_uuid(),title text not null,body text not null,created_at timestamptz not null default now());
 create table if not exists public.portal_settings(id integer primary key check(id=1),portal_name text not null default 'Comreds Papers Portal',currency text not null default 'KES',paper_price numeric(10,2) not null default 50,support_phone text not null default '+254723278526');
 alter table public.papers add column if not exists level text default '',add column if not exists year text default '',add column if not exists semester text default '',add column if not exists tags text[] default '{}',add column if not exists download_count integer not null default 0,add column if not exists uploaded_by uuid references public.profiles(id);
@@ -17,7 +17,7 @@ create table if not exists public.audit_logs(id uuid primary key default gen_ran
 create index if not exists paper_requests_user_idx on public.paper_requests(user_id,created_at desc);
 create index if not exists payments_user_idx on public.payments(user_id,created_at desc);
 create index if not exists payments_checkout_idx on public.payments(checkout_request_id);
-create unique index if not exists payments_receipt_unique_idx on public.payments(receipt) where receipt is not null;
+create unique index if not exists payments_receipt_normalized_unique_idx on public.payments(upper(btrim(receipt))) where receipt is not null;
 create index if not exists papers_available_idx on public.papers(available,created_at desc);
 create index if not exists notifications_user_idx on public.notifications(user_id,read_at,created_at desc);
 create index if not exists downloads_user_idx on public.download_events(user_id,created_at desc);
@@ -99,6 +99,32 @@ create table if not exists public.request_deletion_logs(
   reason text default 'user_or_admin_deleted',
   deleted_at timestamptz not null default now()
 );
+create or replace function public.delete_unpaid_paper_request(p_request_id uuid,p_actor_id uuid)
+returns jsonb language plpgsql security definer set search_path=public as $$
+declare request_row public.paper_requests%rowtype; actor_role text;
+begin
+  select role into actor_role from public.profiles where id=p_actor_id;
+  if not found then return jsonb_build_object('ok',false,'reason','actor_not_found'); end if;
+  select * into request_row from public.paper_requests where id=p_request_id for update;
+  if not found then return jsonb_build_object('ok',false,'reason','not_found'); end if;
+  if actor_role <> 'admin' and request_row.user_id <> p_actor_id then
+    return jsonb_build_object('ok',false,'reason','forbidden');
+  end if;
+  if request_row.status='paid' then return jsonb_build_object('ok',false,'reason','paid'); end if;
+  if exists(select 1 from public.payments where request_id=p_request_id) then
+    return jsonb_build_object('ok',false,'reason','has_payment_attempt');
+  end if;
+  insert into public.audit_logs(actor_id,action,entity_type,entity_id,metadata)
+  values(p_actor_id,'request.delete','paper_request',p_request_id,
+    jsonb_build_object('title',request_row.title,'student',request_row.student_name,'previousStatus',request_row.status));
+  insert into public.request_deletion_logs(request_id,actor_id,title,previous_status)
+  values(p_request_id,p_actor_id,request_row.title,request_row.status);
+  delete from public.paper_requests where id=p_request_id;
+  return jsonb_build_object('ok',true,'deletedId',p_request_id);
+end;
+$$;
+revoke all on function public.delete_unpaid_paper_request(uuid,uuid) from public,anon,authenticated;
+grant execute on function public.delete_unpaid_paper_request(uuid,uuid) to service_role;
 create index if not exists request_deletion_logs_deleted_idx on public.request_deletion_logs(deleted_at desc);
 notify pgrst, 'reload schema';
 
@@ -407,7 +433,9 @@ create unique index if not exists payments_one_successful_results_request_idx
 create unique index if not exists payments_one_successful_refer_request_idx
   on public.payments(refer_request_id)
   where refer_request_id is not null and status = 'success';
-
+create unique index if not exists payments_one_successful_paper_request_idx
+  on public.payments(request_id)
+  where request_id is not null and status = 'success';
 insert into storage.buckets(id, name, public, file_size_limit, allowed_mime_types)
 values ('avatars', 'avatars', false, 3145728, array['image/jpeg', 'image/png', 'image/webp'])
 on conflict (id) do update
@@ -421,5 +449,168 @@ set public = false,
     file_size_limit = 3145728,
     allowed_mime_types = array['image/jpeg', 'image/png', 'image/webp']
 where id = 'avatars';
+
+notify pgrst, 'reload schema';
+
+
+-- v16.5 payment proof, receipts, reconciliation and reversible archival
+alter table public.payments
+  add column if not exists paid_at timestamptz,
+  add column if not exists paid_at_source text not null default 'unknown'
+    check (paid_at_source in ('unknown', 'callback_transaction_date', 'callback_received_at', 'admin_verified', 'admin_recorded_at')),
+  add column if not exists payer_name text,
+  add column if not exists payer_name_source text not null default 'unavailable'
+    check (payer_name_source in ('unavailable', 'provider_callback', 'admin_verified')),
+  add column if not exists confirmation_source text not null default 'legacy'
+    check (confirmation_source in ('legacy', 'daraja_callback', 'admin_verified')),
+  add column if not exists reconciliation_status text not null default 'not_checked'
+    check (reconciliation_status in ('not_checked', 'awaiting_callback', 'provider_success_pending_proof', 'provider_pending', 'proof_mismatch', 'verified', 'provider_failed')),
+  add column if not exists provider_result_code integer,
+  add column if not exists provider_result_description text,
+  add column if not exists provider_checked_at timestamptz,
+  add column if not exists archived_at timestamptz,
+  add column if not exists archived_by uuid references public.profiles(id) on delete set null,
+  add column if not exists archive_reason text;
+
+alter table public.paper_requests
+  add column if not exists archived_at timestamptz,
+  add column if not exists archived_by uuid references public.profiles(id) on delete set null;
+alter table public.result_requests
+  add column if not exists archived_at timestamptz,
+  add column if not exists archived_by uuid references public.profiles(id) on delete set null;
+alter table public.refer_requests
+  add column if not exists archived_at timestamptz,
+  add column if not exists archived_by uuid references public.profiles(id) on delete set null;
+
+create index if not exists payments_reconciliation_queue_idx
+  on public.payments(status, reconciliation_status, created_at desc)
+  where checkout_request_id is not null and archived_at is null;
+create index if not exists payments_paid_at_idx
+  on public.payments(paid_at desc)
+  where status = 'success';
+create index if not exists paper_requests_active_archive_idx
+  on public.paper_requests(archived_at, created_at desc);
+create index if not exists result_requests_active_archive_idx
+  on public.result_requests(archived_at, created_at desc);
+create index if not exists refer_requests_active_archive_idx
+  on public.refer_requests(archived_at, created_at desc);
+create index if not exists payments_active_archive_idx
+  on public.payments(archived_at, created_at desc);
+
+notify pgrst, 'reload schema';
+
+-- v16.5.3: serialize payment-attempt creation with request archival and atomically audit archive/restore.
+create or replace function public.guard_payment_request_not_archived()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+  archived timestamptz;
+begin
+  if new.request_id is not null then
+    select archived_at into archived from public.paper_requests where id = new.request_id for update;
+  elsif new.result_request_id is not null then
+    select archived_at into archived from public.result_requests where id = new.result_request_id for update;
+  elsif new.refer_request_id is not null then
+    select archived_at into archived from public.refer_requests where id = new.refer_request_id for update;
+  end if;
+  if archived is not null then
+    raise exception 'Archived requests cannot accept new payment attempts' using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists payments_guard_request_not_archived on public.payments;
+create trigger payments_guard_request_not_archived
+before insert on public.payments
+for each row execute function public.guard_payment_request_not_archived();
+
+create or replace function public.set_request_archive_state(
+  p_type text,
+  p_id uuid,
+  p_actor_id uuid,
+  p_action text,
+  p_reason text default ''
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  actor_role text;
+  owner_id uuid;
+  record_status text;
+  previous_archive timestamptz;
+  entity_name text;
+begin
+  if p_type not in ('paper', 'results', 'refer', 'payment') or p_action not in ('archive', 'restore') then
+    return jsonb_build_object('ok', false, 'reason', 'invalid_action');
+  end if;
+  select role into actor_role from public.profiles where id = p_actor_id;
+  if not found then return jsonb_build_object('ok', false, 'reason', 'actor_not_found'); end if;
+
+  if p_type = 'paper' then
+    select user_id, status, archived_at into owner_id, record_status, previous_archive
+    from public.paper_requests where id = p_id for update;
+    entity_name := 'paper_request';
+  elsif p_type = 'results' then
+    select user_id, status, archived_at into owner_id, record_status, previous_archive
+    from public.result_requests where id = p_id for update;
+    entity_name := 'result_request';
+  elsif p_type = 'refer' then
+    select user_id, status, archived_at into owner_id, record_status, previous_archive
+    from public.refer_requests where id = p_id for update;
+    entity_name := 'refer_request';
+  else
+    select user_id, status, archived_at into owner_id, record_status, previous_archive
+    from public.payments where id = p_id for update;
+    entity_name := 'payment';
+  end if;
+  if not found then return jsonb_build_object('ok', false, 'reason', 'not_found'); end if;
+  if actor_role <> 'admin' and owner_id <> p_actor_id then
+    return jsonb_build_object('ok', false, 'reason', 'forbidden');
+  end if;
+
+  if p_action = 'archive' then
+    if p_type = 'payment' and record_status in ('initiated', 'pending') then
+      return jsonb_build_object('ok', false, 'reason', 'pending_payment');
+    end if;
+    if p_type = 'paper' and exists (
+      select 1 from public.payments where request_id = p_id and status in ('initiated', 'pending')
+    ) then return jsonb_build_object('ok', false, 'reason', 'pending_payment'); end if;
+    if p_type = 'results' and exists (
+      select 1 from public.payments where result_request_id = p_id and status in ('initiated', 'pending')
+    ) then return jsonb_build_object('ok', false, 'reason', 'pending_payment'); end if;
+    if p_type = 'refer' and exists (
+      select 1 from public.payments where refer_request_id = p_id and status in ('initiated', 'pending')
+    ) then return jsonb_build_object('ok', false, 'reason', 'pending_payment'); end if;
+  end if;
+
+  if p_type = 'paper' then
+    update public.paper_requests set archived_at = case when p_action = 'archive' then now() else null end,
+      archived_by = case when p_action = 'archive' then p_actor_id else null end where id = p_id;
+  elsif p_type = 'results' then
+    update public.result_requests set archived_at = case when p_action = 'archive' then now() else null end,
+      archived_by = case when p_action = 'archive' then p_actor_id else null end where id = p_id;
+  elsif p_type = 'refer' then
+    update public.refer_requests set archived_at = case when p_action = 'archive' then now() else null end,
+      archived_by = case when p_action = 'archive' then p_actor_id else null end where id = p_id;
+  else
+    update public.payments set archived_at = case when p_action = 'archive' then now() else null end,
+      archived_by = case when p_action = 'archive' then p_actor_id else null end,
+      archive_reason = case when p_action = 'archive' then left(coalesce(p_reason, 'user_or_admin_archived'), 300) else null end
+    where id = p_id;
+  end if;
+
+  insert into public.audit_logs(actor_id, action, entity_type, entity_id, metadata)
+  values (p_actor_id, 'record.' || p_action, entity_name, p_id,
+    jsonb_build_object('reason', left(coalesce(p_reason, ''), 300), 'previousArchivedAt', previous_archive));
+  return jsonb_build_object('ok', true, 'type', p_type, 'id', p_id, 'archived', p_action = 'archive');
+end;
+$$;
+
+revoke all on function public.set_request_archive_state(text, uuid, uuid, text, text) from public, anon, authenticated;
+grant execute on function public.set_request_archive_state(text, uuid, uuid, text, text) to service_role;
 
 notify pgrst, 'reload schema';

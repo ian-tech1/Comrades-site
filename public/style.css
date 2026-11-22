@@ -1388,3 +1388,77 @@ tr:hover td {
     overscroll-behavior-x: contain;
   }
 }
+
+/* Payment reconciliation, archive visibility and refresh feedback. */
+.refresh-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 30px;
+  margin: -14px 0 14px;
+}
+.archived-toggle {
+  color: var(--muted);
+  font-size: 12px;
+}
+.payment-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  margin: 12px 0;
+}
+.payment-tools input {
+  flex: 1 1 240px;
+  min-width: 160px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.payment-tools .btn {
+  padding: 10px 13px;
+  font-size: 12px;
+}
+.payment-meta {
+  display: block;
+  margin-top: 4px;
+  white-space: normal;
+  max-width: 230px;
+}
+.payer-label {
+  display: block;
+  margin-top: 7px;
+}
+.receipt-link {
+  color: var(--blue);
+}
+.verify-name {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
+.archived-row td {
+  background: #f8f4ea;
+  opacity: 0.82;
+}
+.archived-row::after {
+  content: "";
+}
+@media (max-width: 650px) {
+  .refresh-bar {
+    align-items: flex-start;
+    flex-direction: column;
+    margin-top: 0;
+  }
+  .payment-tools {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .payment-tools .btn,
+  .payment-tools input {
+    width: 100%;
+  }
+}

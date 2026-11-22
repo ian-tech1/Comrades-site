@@ -6,6 +6,13 @@ import { resolveRequestPath } from "./request-path.js";
 import { isSameOriginRequest, safeEquals } from "./security.js";
 import { isValidMpesaConfirmation } from "./payment-proof.js";
 import {
+  formatDarajaTimestamp,
+  formatMpesaTransactionDate,
+  normalizeKenyanPhone,
+  parseMpesaTransactionDate,
+} from "./mpesa-transaction.js";
+import { createReceiptPdf } from "./receipt-pdf.js";
+import {
   isValidUsername,
   normalizeUsername,
   validateResultsRequest,
@@ -299,6 +306,7 @@ const mapPaper = (p) => ({
     amount: Number(r.amount),
     createdAt: r.created_at,
     level: r.level || "",
+    archivedAt: r.archived_at || null,
   }),
   mapPayment = (p) => ({
     id: p.id,
@@ -308,10 +316,21 @@ const mapPaper = (p) => ({
     phone: p.phone,
     status: p.status,
     createdAt: p.created_at,
+    paidAt: p.paid_at || null,
+    paidAtSource: p.paid_at_source || "unknown",
     receipt: p.receipt,
     paidPhone: p.paid_phone || "",
+    payerName: p.payer_name || "",
+    payerNameSource: p.payer_name_source || "unavailable",
     paidAmount: Number(p.paid_amount || 0),
     resultCode: p.result_code,
+    confirmationSource: p.confirmation_source || "legacy",
+    reconciliationStatus: p.reconciliation_status || "not_checked",
+    providerResultCode: p.provider_result_code,
+    providerResultDescription: p.provider_result_description || "",
+    providerCheckedAt: p.provider_checked_at || null,
+    archivedAt: p.archived_at || null,
+    archiveReason: p.archive_reason || "",
     error: p.error_message || "",
     serviceType: p.result_request_id
       ? "results"
@@ -345,6 +364,7 @@ const mapPaper = (p) => ({
     uploadedAt: r.uploaded_at || null,
     serviceFee: Number(r.service_fee || 0),
     paymentStatus: r.payment_status || "paid",
+    archivedAt: r.archived_at || null,
   });
 const mapReferRequest = (r) => ({
   id: r.id,
@@ -360,10 +380,47 @@ const mapReferRequest = (r) => ({
   serviceFee: Number(r.service_fee || 0),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
+  archivedAt: r.archived_at || null,
 });
 async function notifyAdmins(title, body, type = "payment") {
   const { data } = await db.from("profiles").select("id").eq("role", "admin");
   for (const a of data || []) await notify(a.id, title, body, type);
+}
+async function writeAudit(entry) {
+  const { error } = await db.from("audit_logs").insert(entry);
+  if (error) throw error;
+}
+function manualPaymentEvidence(body) {
+  const paidPhone = normalizeKenyanPhone(body.payerPhone || body.phone),
+    payerName = String(body.payerName || "")
+      .trim()
+      .slice(0, 120),
+    rawTime = String(body.paidAt || body.transactionDateTime || "").trim();
+  if (!paidPhone)
+    return {
+      error: "Enter the Kenyan phone number shown in the M-Pesa transaction.",
+    };
+  let paidAt = now(),
+    paidAtSource = "admin_recorded_at";
+  if (rawTime) {
+    if (!/T.*(?:Z|[+-]\d{2}:\d{2})$/i.test(rawTime))
+      return {
+        error:
+          "Transaction time must include a timezone, for example an ISO timestamp.",
+      };
+    const parsed = new Date(rawTime);
+    if (!Number.isFinite(parsed.getTime()))
+      return { error: "Enter a valid transaction date and time." };
+    paidAt = parsed.toISOString();
+    paidAtSource = "admin_verified";
+  }
+  return {
+    paidPhone,
+    payerName,
+    payerNameSource: payerName ? "admin_verified" : "unavailable",
+    paidAt,
+    paidAtSource,
+  };
 }
 async function markPaid(pay, receipt, amount) {
   if (!pay.request_id) {
@@ -389,6 +446,18 @@ async function markPaid(pay, receipt, amount) {
       .select("id,user_id,institution_name,registration_number")
       .maybeSingle();
     if (error) throw error;
+    if (!request) {
+      const { data: existing, error: existingError } = await db
+        .from(service.table)
+        .select("id,payment_status")
+        .eq("id", service.id)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing || existing.payment_status !== "paid")
+        throw Error(
+          "Confirmed payment could not update its linked service request.",
+        );
+    }
     if (request) {
       await notify(
         request.user_id,
@@ -400,7 +469,7 @@ async function markPaid(pay, receipt, amount) {
         "Academic service paid",
         `A ${service.label} request (${String(request.id).slice(0, 8)}) has been paid: KSh ${amount}, receipt ${receipt || "pending"}.`,
       );
-      await db.from("audit_logs").insert({
+      await writeAudit({
         actor_id: null,
         action: "service.payment.confirmed",
         entity_type: service.table,
@@ -410,13 +479,26 @@ async function markPaid(pay, receipt, amount) {
     }
     return;
   }
-  const { data: r } = await db
+  const { data: r, error } = await db
     .from("paper_requests")
     .update({ status: "paid" })
     .eq("id", pay.request_id)
     .neq("status", "paid")
     .select("user_id,title,student_name")
     .maybeSingle();
+  if (error) throw error;
+  if (!r) {
+    const { data: existing, error: existingError } = await db
+      .from("paper_requests")
+      .select("id,status")
+      .eq("id", pay.request_id)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (!existing || existing.status !== "paid")
+      throw Error(
+        "Confirmed payment could not update its linked paper request.",
+      );
+  }
   if (r) {
     await notify(
       r.user_id,
@@ -433,23 +515,21 @@ async function markPaid(pay, receipt, amount) {
 async function queryStk(id) {
   const { host, token } = await darajaToken(),
     sc = env.DARAJA_SHORTCODE || "174379",
-    ts = new Date()
-      .toISOString()
-      .replace(/[-T:.Z]/g, "")
-      .slice(0, 14),
-    r = await fetch(host + "/mpesa/stkpushquery/v1/query", {
-      method: "POST",
-      headers: {
-        authorization: "Bearer " + token,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        BusinessShortCode: sc,
-        Password: Buffer.from(sc + env.DARAJA_PASSKEY + ts).toString("base64"),
-        Timestamp: ts,
-        CheckoutRequestID: id,
-      }),
-    });
+    ts = formatDarajaTimestamp();
+  if (!ts) throw Error("Could not generate the Daraja timestamp.");
+  const r = await fetch(host + "/mpesa/stkpushquery/v1/query", {
+    method: "POST",
+    headers: {
+      authorization: "Bearer " + token,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      BusinessShortCode: sc,
+      Password: Buffer.from(sc + env.DARAJA_PASSKEY + ts).toString("base64"),
+      Timestamp: ts,
+      CheckoutRequestID: id,
+    }),
+  });
   return (await dJson(r)).j;
 }
 async function notify(userId, title, body, type = "system") {
@@ -516,11 +596,9 @@ async function startSTK(phone, amount, account) {
   const { host, token } = await darajaToken(),
     shortcode = env.DARAJA_SHORTCODE || "174379";
   if (!env.DARAJA_PASSKEY) throw Error("Set the Daraja passkey in Vercel.");
-  const ts = new Date()
-      .toISOString()
-      .replace(/[-T:.Z]/g, "")
-      .slice(0, 14),
-    msisdn = phone.replace(/\D/g, "").replace(/^0/, "254");
+  const ts = formatDarajaTimestamp();
+  if (!ts) throw Error("Could not generate the Daraja timestamp.");
+  const msisdn = phone.replace(/\D/g, "").replace(/^0/, "254");
   const payload = {
     BusinessShortCode: shortcode,
     Password: Buffer.from(shortcode + env.DARAJA_PASSKEY + ts).toString(
@@ -620,6 +698,8 @@ async function route(req, res) {
       ],
       paper_requests: [
         "amount",
+        "archived_at",
+        "archived_by",
         "created_at",
         "id",
         "level",
@@ -662,14 +742,26 @@ async function route(req, res) {
       ],
       payments: [
         "amount",
+        "archive_reason",
+        "archived_at",
+        "archived_by",
         "checkout_request_id",
+        "confirmation_source",
         "created_at",
         "error_message",
         "id",
         "merchant_request_id",
         "paid_amount",
+        "paid_at",
+        "paid_at_source",
         "paid_phone",
+        "payer_name",
+        "payer_name_source",
         "phone",
+        "provider_checked_at",
+        "provider_result_code",
+        "provider_result_description",
+        "reconciliation_status",
         "receipt",
         "refer_request_id",
         "result_request_id",
@@ -704,6 +796,8 @@ async function route(req, res) {
       ],
       result_requests: [
         "admission_number",
+        "archived_at",
+        "archived_by",
         "created_at",
         "id",
         "institution_name",
@@ -722,6 +816,8 @@ async function route(req, res) {
       ],
       refer_requests: [
         "admission_number",
+        "archived_at",
+        "archived_by",
         "created_at",
         "exam_period",
         "failed_units",
@@ -789,7 +885,7 @@ async function route(req, res) {
       },
       problems,
       hint: problems.length
-        ? "Run supabase/schema.sql in the Supabase SQL Editor, then run: notify pgrst, 'reload schema';"
+        ? "Do not run the full schema on an existing portal. Identify the missing objects, then apply only the reviewed versioned migration for this database; reload the PostgREST schema cache after the migration."
         : undefined,
       version: "4.0.0",
     });
@@ -905,6 +1001,10 @@ async function route(req, res) {
     const u = await requireUser(req, res);
     if (!u) return;
     if (u.mustChangePassword) return json(res, 200, { user: u });
+    const includeArchived =
+      new URL(req.url, "https://vercel.local").searchParams.get(
+        "includeArchived",
+      ) === "true";
     const [s, rr, pp, pa, nn, uu, nt, ff, resultRows, referRows] =
       await Promise.all([
         getSettings(),
@@ -965,10 +1065,14 @@ async function route(req, res) {
     for (const x of [rr, pp, pa, nn, uu, nt, ff, resultRows, referRows])
       if (x.error && x.error.code !== "42P01") throw x.error;
     const requests = (rr.data || []).filter(
-        (x) => u.role === "admin" || x.user_id === u.id,
+        (x) =>
+          (u.role === "admin" || x.user_id === u.id) &&
+          (includeArchived || !x.archived_at),
       ),
       payments = (pa.data || []).filter(
-        (x) => u.role === "admin" || x.user_id === u.id,
+        (x) =>
+          (u.role === "admin" || x.user_id === u.id) &&
+          (includeArchived || !x.archived_at),
       );
     return json(res, 200, {
       user: u,
@@ -979,8 +1083,12 @@ async function route(req, res) {
       notices: (nn.data || []).map(mapNotice),
       notifications: nt.data || [],
       favorites: (ff.data || []).map((x) => x.paper_id),
-      resultRequests: (resultRows.data || []).map(mapResultRequest),
-      referRequests: (referRows.data || []).map(mapReferRequest),
+      resultRequests: (resultRows.data || [])
+        .filter((x) => includeArchived || !x.archived_at)
+        .map(mapResultRequest),
+      referRequests: (referRows.data || [])
+        .filter((x) => includeArchived || !x.archived_at)
+        .map(mapReferRequest),
       settings: {
         portalName: s.portal_name,
         currency: s.currency,
@@ -1143,7 +1251,7 @@ async function route(req, res) {
       `A learner submitted a failed-exam registration request (reference ${data.id.slice(0, 8)}). Fee: KSh ${serviceFee}.`,
       "refer",
     );
-    await db.from("audit_logs").insert({
+    await writeAudit({
       actor_id: u.id,
       action: "refer_request.create",
       entity_type: "refer_request",
@@ -1224,7 +1332,7 @@ async function route(req, res) {
         `Your academic results request is now ${status.replaceAll("_", " ")}.`,
         "results",
       );
-    await db.from("audit_logs").insert({
+    await writeAudit({
       actor_id: u.id,
       action: "results.status",
       entity_type: "result_request",
@@ -1276,7 +1384,7 @@ async function route(req, res) {
         `Your failed-exam registration request is now ${status}.`,
         "refer",
       );
-    await db.from("audit_logs").insert({
+    await writeAudit({
       actor_id: u.id,
       action: "refer_request.status",
       entity_type: "refer_request",
@@ -1413,7 +1521,7 @@ async function route(req, res) {
       "Your requested results document is ready to view in the portal.",
       "results",
     );
-    await db.from("audit_logs").insert({
+    await writeAudit({
       actor_id: u.id,
       action: "results.upload",
       entity_type: "result_request",
@@ -1504,34 +1612,51 @@ async function route(req, res) {
       .maybeSingle();
     if (q.error) throw q.error;
     if (!q.data) return fail(res, 404, "Request not found.");
+    if (u.role !== "admin" && q.data.user_id !== u.id)
+      return fail(res, 403, "You can only delete your own requests.");
     if (q.data.status === "paid")
       return fail(
         res,
         409,
         "Paid requests cannot be deleted because they are linked to a confirmed payment.",
       );
-    if (u.role !== "admin" && q.data.user_id !== u.id)
-      return fail(res, 403, "You can only delete your own requests.");
-    const { error } = await db.from("paper_requests").delete().eq("id", id);
-    if (error) throw error;
-    await db.from("audit_logs").insert({
-      actor_id: u.id,
-      action: "request.delete",
-      entity_type: "paper_request",
-      entity_id: null,
-      metadata: {
-        requestId: id,
-        title: q.data.title,
-        student: q.data.student_name,
-        previousStatus: q.data.status,
-      },
-    });
-    await db.from("request_deletion_logs").insert({
-      request_id: id,
-      actor_id: u.id,
-      title: q.data.title,
-      previous_status: q.data.status,
-    });
+    const { data: attempts, error: attemptsError } = await db
+      .from("payments")
+      .select("id")
+      .eq("request_id", id)
+      .limit(1);
+    if (attemptsError) throw attemptsError;
+    if (attempts?.length)
+      return fail(
+        res,
+        409,
+        "This request has a payment attempt. Archive it instead so its financial history is preserved.",
+      );
+    const { data: deletion, error: deletionError } = await db.rpc(
+      "delete_unpaid_paper_request",
+      { p_request_id: id, p_actor_id: u.id },
+    );
+    if (deletionError) throw deletionError;
+    if (!deletion?.ok) {
+      const status =
+        deletion?.reason === "not_found" ||
+        deletion?.reason === "actor_not_found"
+          ? 404
+          : deletion?.reason === "forbidden"
+            ? 403
+            : 409;
+      return fail(
+        res,
+        status,
+        deletion?.reason === "has_payment_attempt"
+          ? "This request has a payment attempt. Archive it instead so its financial history is preserved."
+          : deletion?.reason === "paid"
+            ? "Paid requests cannot be deleted because their financial history must be preserved."
+            : deletion?.reason === "forbidden"
+              ? "You can only delete your own requests."
+              : "Request could not be deleted. Refresh and try again.",
+      );
+    }
     return json(res, 200, { ok: true, deletedId: id });
   }
   if (method === "POST" && path === "/api/payments/stk") {
@@ -1561,6 +1686,8 @@ async function route(req, res) {
       .maybeSingle();
     if (requestError) throw requestError;
     if (!r) return fail(res, 404, "Request not found.");
+    if (r.archived_at)
+      return fail(res, 409, "Restore this request before starting a payment.");
     const paid =
         serviceType === "paper"
           ? r.status === "paid"
@@ -1634,6 +1761,7 @@ async function route(req, res) {
         amount: Math.round(amount),
         phone: msisdn,
         status: "initiated",
+        reconciliation_status: "awaiting_callback",
       })
       .select("*")
       .single();
@@ -1643,6 +1771,8 @@ async function route(req, res) {
         409,
         "A payment prompt is already pending for this request.",
       );
+    if (error?.code === "23514")
+      return fail(res, 409, "Restore this request before starting a payment.");
     if (error) throw error;
     try {
       const stk = await startSTK(msisdn, amount, r.id),
@@ -1672,34 +1802,57 @@ async function route(req, res) {
       cb = b?.Body?.stkCallback;
     if (!cb?.CheckoutRequestID)
       return json(res, 200, { ResultCode: 0, ResultDesc: "Accepted" });
-    const { data: pay } = await db
+    const { data: pay, error: paymentLookupError } = await db
       .from("payments")
       .select("*")
       .eq("checkout_request_id", cb.CheckoutRequestID)
       .maybeSingle();
-    if (!pay) return json(res, 200, { ResultCode: 0, ResultDesc: "Accepted" });
+    if (paymentLookupError) throw paymentLookupError;
+    if (!pay) {
+      const { error: orphanError } = await db.from("payment_events").upsert(
+        {
+          payment_id: null,
+          checkout_request_id: cb.CheckoutRequestID,
+          result_code: Number(cb.ResultCode),
+          result_description: cb.ResultDesc || "Unmatched callback",
+          payload: b,
+        },
+        { onConflict: "checkout_request_id" },
+      );
+      if (orphanError) throw orphanError;
+      await notifyAdmins(
+        "Unmatched M-Pesa callback",
+        `A callback arrived for checkout ${String(cb.CheckoutRequestID).slice(0, 24)} but no payment record matched it. Review the payment event log.`,
+      );
+      return json(res, 200, { ResultCode: 0, ResultDesc: "Accepted" });
+    }
     const items = Object.fromEntries(
       (cb.CallbackMetadata?.Item || []).map((x) => [x.Name, x.Value]),
     );
+    const callbackReceipt = String(items.MpesaReceiptNumber || "")
+      .trim()
+      .toUpperCase();
     let valid = isValidMpesaConfirmation({
       resultCode: cb.ResultCode,
       amount: items.Amount,
       expectedAmount: pay.amount,
       payerPhone: items.PhoneNumber,
       expectedPhone: pay.phone,
-      receipt: items.MpesaReceiptNumber,
+      receipt: callbackReceipt,
     });
-    if (valid) {
+    let duplicateReceipt = false;
+    if (callbackReceipt) {
       const { data: duplicate, error } = await db
         .from("payments")
         .select("id")
-        .eq("receipt", String(items.MpesaReceiptNumber))
+        .ilike("receipt", callbackReceipt)
         .neq("id", pay.id)
         .limit(1);
       if (error) throw error;
-      if (duplicate?.length) valid = false;
+      duplicateReceipt = Boolean(duplicate?.length);
+      if (duplicateReceipt) valid = false;
     }
-    await db.from("payment_events").upsert(
+    const { error: eventError } = await db.from("payment_events").upsert(
       {
         payment_id: pay.id,
         checkout_request_id: cb.CheckoutRequestID,
@@ -1709,40 +1862,121 @@ async function route(req, res) {
       },
       { onConflict: "checkout_request_id" },
     );
+    if (eventError) throw eventError;
+    if (pay.status === "success") {
+      if (
+        valid &&
+        callbackReceipt ===
+          String(pay.receipt || "")
+            .trim()
+            .toUpperCase()
+      )
+        await markPaid(pay, callbackReceipt, items.Amount);
+      return json(res, 200, { ResultCode: 0, ResultDesc: "Accepted" });
+    }
+    const callbackSuccess = Number(cb.ResultCode) === 0,
+      paidAt = valid
+        ? parseMpesaTransactionDate(items.TransactionDate) || now()
+        : null,
+      paidAtSource = valid
+        ? parseMpesaTransactionDate(items.TransactionDate)
+          ? "callback_transaction_date"
+          : "callback_received_at"
+        : "unknown",
+      providerName =
+        typeof items.PayerName === "string" && items.PayerName.trim()
+          ? items.PayerName.trim().slice(0, 120)
+          : null;
     let paymentUpdate = db
       .from("payments")
       .update({
         result_code: Number(cb.ResultCode),
         result_description: cb.ResultDesc,
-        status: valid ? "success" : "failed",
-        receipt: items.MpesaReceiptNumber || null,
+        status: valid
+          ? "success"
+          : callbackSuccess
+            ? "review_required"
+            : "failed",
+        receipt: duplicateReceipt ? null : callbackReceipt || null,
         paid_phone: items.PhoneNumber ? String(items.PhoneNumber) : null,
         paid_amount: items.Amount ? Number(items.Amount) : null,
+        paid_at: paidAt,
+        paid_at_source: paidAtSource,
+        payer_name: providerName,
+        payer_name_source: providerName ? "provider_callback" : "unavailable",
+        confirmation_source: valid ? "daraja_callback" : "legacy",
+        reconciliation_status: valid
+          ? "verified"
+          : callbackSuccess
+            ? "proof_mismatch"
+            : "provider_failed",
       })
-      .eq("id", pay.id);
-    if (!valid)
-      paymentUpdate = paymentUpdate.in("status", ["initiated", "pending"]);
+      .eq("id", pay.id)
+      .in("status", ["initiated", "pending", "review_required", "failed"]);
     const { data: updatedPayment, error: updateError } = await paymentUpdate
       .select("id")
       .maybeSingle();
     if (updateError?.code === "23505") {
-      console.error(
-        "Rejected M-Pesa receipt already assigned to another payment.",
-      );
-      console.error(
-        "Payment confirmation conflicted with an existing receipt or service payment.",
+      const conflictAt = parseMpesaTransactionDate(items.TransactionDate),
+        conflictPhone = items.PhoneNumber ? String(items.PhoneNumber) : null,
+        { error: reviewError } = await db
+          .from("payments")
+          .update({
+            result_code: Number(cb.ResultCode),
+            result_description:
+              "Matching successful callback conflicts with another confirmed payment and requires review.",
+            status: "review_required",
+            receipt: null,
+            paid_phone: conflictPhone,
+            paid_amount: items.Amount ? Number(items.Amount) : null,
+            paid_at: conflictAt || now(),
+            paid_at_source: conflictAt
+              ? "callback_transaction_date"
+              : "callback_received_at",
+            payer_name: providerName,
+            payer_name_source: providerName
+              ? "provider_callback"
+              : "unavailable",
+            confirmation_source: "legacy",
+            reconciliation_status: "proof_mismatch",
+          })
+          .eq("id", pay.id)
+          .in("status", ["initiated", "pending", "review_required", "failed"]);
+      if (reviewError) throw reviewError;
+      await writeAudit({
+        actor_id: null,
+        action: "payment.callback.unique_conflict",
+        entity_type: "payment",
+        entity_id: pay.id,
+        metadata: { checkoutRequestId: cb.CheckoutRequestID },
+      });
+      await notifyAdmins(
+        "M-Pesa payment needs review",
+        `A successful callback for payment ${pay.id.slice(0, 8)} matched its amount and phone but conflicted with another confirmed receipt/payment. The callback event is saved; verify it before confirming.`,
       );
       return json(res, 200, { ResultCode: 0, ResultDesc: "Accepted" });
     }
     if (updateError) throw updateError;
     if (valid && updatedPayment) {
-      await markPaid(pay, items.MpesaReceiptNumber, items.Amount);
-      if (pay.status === "success" && !pay.receipt)
-        await notifyAdmins(
-          "M-Pesa code received",
-          `Code ${items.MpesaReceiptNumber} for KSh ${items.Amount} (order ${String(pay.request_id).slice(0, 8)})`,
-        );
-    } else if (!valid && updatedPayment) {
+      await markPaid(pay, callbackReceipt, items.Amount);
+    } else if (callbackSuccess && updatedPayment) {
+      await writeAudit({
+        actor_id: null,
+        action: "payment.callback.proof_mismatch",
+        entity_type: "payment",
+        entity_id: pay.id,
+        metadata: {
+          checkoutRequestId: cb.CheckoutRequestID,
+          reason: duplicateReceipt
+            ? "duplicate_receipt"
+            : "callback_proof_did_not_match_expected_amount_and_phone",
+        },
+      });
+      await notifyAdmins(
+        "M-Pesa payment needs review",
+        `A successful callback for payment ${pay.id.slice(0, 8)} did not match the expected amount, payer phone, or unique receipt. It was not marked paid.`,
+      );
+    } else if (!callbackSuccess && updatedPayment) {
       if (pay.request_id)
         await db
           .from("paper_requests")
@@ -1763,6 +1997,119 @@ async function route(req, res) {
           .neq("payment_status", "paid");
     }
     return json(res, 200, { ResultCode: 0, ResultDesc: "Accepted" });
+  }
+  const receiptMatch = path.match(/^\/api\/payments\/([^/]+)\/receipt$/);
+  if (method === "GET" && receiptMatch) {
+    const u = await requireUser(req, res);
+    if (!u) return;
+    const { data: payment, error: paymentError } = await db
+      .from("payments")
+      .select("*")
+      .eq("id", receiptMatch[1])
+      .eq("status", "success")
+      .maybeSingle();
+    if (paymentError) throw paymentError;
+    if (!payment || (u.role !== "admin" && payment.user_id !== u.id))
+      return fail(res, 404, "Payment receipt not found.");
+    const [profileResult, serviceResult] = await Promise.all([
+      db
+        .from("profiles")
+        .select("id,name,username,email,phone")
+        .eq("id", payment.user_id)
+        .maybeSingle(),
+      payment.request_id
+        ? db
+            .from("paper_requests")
+            .select("id,title,subject,student_name")
+            .eq("id", payment.request_id)
+            .maybeSingle()
+        : payment.result_request_id
+          ? db
+              .from("result_requests")
+              .select(
+                "id,institution_name,registration_number,admission_number",
+              )
+              .eq("id", payment.result_request_id)
+              .maybeSingle()
+          : payment.refer_request_id
+            ? db
+                .from("refer_requests")
+                .select(
+                  "id,institution_name,registration_number,admission_number,exam_period",
+                )
+                .eq("id", payment.refer_request_id)
+                .maybeSingle()
+            : Promise.resolve({ data: null, error: null }),
+    ]);
+    if (profileResult.error) throw profileResult.error;
+    if (serviceResult.error) throw serviceResult.error;
+    const service = payment.result_request_id
+        ? "Academic results request"
+        : payment.refer_request_id
+          ? "Supplementary/refer registration"
+          : "Paper request",
+      request = serviceResult.data || {},
+      paidAt = payment.paid_at || payment.created_at,
+      sourceLabels = {
+        callback_transaction_date: "Safaricom callback transaction time (EAT)",
+        callback_received_at:
+          "Callback received time; Safaricom time unavailable",
+        admin_verified: "Time verified by administrator from M-Pesa evidence",
+        admin_recorded_at:
+          "Administrator record time; transaction time unavailable",
+        unknown: "Transaction time unavailable",
+      },
+      nameLabels = {
+        provider_callback: "Supplied by provider callback",
+        admin_verified: "Administrator verified against M-Pesa evidence",
+        unavailable: "Not supplied by M-Pesa callback",
+      },
+      confirmationLabels = {
+        daraja_callback: "Safaricom callback with matching proof",
+        admin_verified: "Administrator verified M-Pesa evidence",
+        legacy: "Previously recorded payment",
+      },
+      pdf = createReceiptPdf({
+        portalName: (await getSettings()).portal_name,
+        receipt: payment.receipt,
+        status: "Confirmed",
+        service,
+        requestReference:
+          [
+            request.title,
+            request.institution_name,
+            request.registration_number,
+            request.admission_number,
+            request.exam_period,
+          ]
+            .filter(Boolean)
+            .join(" · ") || payment.id.slice(0, 8),
+        amount: payment.paid_amount || payment.amount,
+        paidAt: paidAt ? formatMpesaTransactionDate(paidAt) : "Not supplied",
+        paidAtSource:
+          sourceLabels[payment.paid_at_source] || sourceLabels.unknown,
+        studentName: profileResult.data?.name || request.student_name,
+        username: profileResult.data?.username,
+        email: profileResult.data?.email,
+        registeredPhone: profileResult.data?.phone,
+        payerName: payment.payer_name,
+        payerNameSource:
+          nameLabels[payment.payer_name_source] || nameLabels.unavailable,
+        paidPhone: payment.paid_phone,
+        confirmationSource:
+          confirmationLabels[payment.confirmation_source] ||
+          confirmationLabels.legacy,
+      });
+    res.statusCode = 200;
+    res.setHeader("content-type", "application/pdf");
+    res.setHeader(
+      "content-disposition",
+      `attachment; filename="comreds-receipt-${String(payment.receipt || payment.id).replace(/[^A-Za-z0-9_-]/g, "")}.pdf"`,
+    );
+    res.setHeader("cache-control", "private, no-store");
+    res.setHeader("x-content-type-options", "nosniff");
+    res.end(pdf);
+    return;
   }
   if (method === "GET" && path.startsWith("/api/payments/status/")) {
     const u = await requireUser(req, res);
@@ -1799,7 +2146,11 @@ async function route(req, res) {
           .maybeSingle();
         if (
           servicePayment?.checkout_request_id &&
-          Date.now() - new Date(servicePayment.created_at) > 10000
+          Date.now() -
+            new Date(
+              servicePayment.provider_checked_at || servicePayment.created_at,
+            ).getTime() >
+            30000
         ) {
           try {
             const query = await queryStk(servicePayment.checkout_request_id);
@@ -1811,10 +2162,15 @@ async function route(req, res) {
               await db
                 .from("payments")
                 .update({
-                  result_code: Number(query.ResultCode),
-                  result_description:
+                  provider_result_code: Number(query.ResultCode),
+                  provider_result_description:
                     query.ResultDesc ||
                     "Daraja query returned; awaiting authenticated callback details.",
+                  provider_checked_at: now(),
+                  reconciliation_status:
+                    Number(query.ResultCode) === 0
+                      ? "provider_success_pending_proof"
+                      : "provider_pending",
                 })
                 .eq("id", servicePayment.id)
                 .in("status", ["initiated", "pending"]);
@@ -1830,7 +2186,7 @@ async function route(req, res) {
       }
       const { data: serviceReceipt } = await db
         .from("payments")
-        .select("receipt,amount")
+        .select("id,receipt,amount,paid_at,payer_name,paid_phone")
         .eq(serviceField, id)
         .eq("status", "success")
         .order("created_at", { ascending: false })
@@ -1839,8 +2195,10 @@ async function route(req, res) {
       return json(res, 200, {
         status: serviceRequest.payment_status,
         serviceType,
+        paymentId: serviceReceipt?.id || null,
         receipt: serviceReceipt?.receipt || null,
         amount: Number(serviceReceipt?.amount || serviceRequest.service_fee),
+        paidAt: serviceReceipt?.paid_at || null,
       });
     }
     let { data: r } = await db
@@ -1861,7 +2219,9 @@ async function route(req, res) {
         .maybeSingle();
       if (
         pay?.checkout_request_id &&
-        Date.now() - new Date(pay.created_at) > 10000
+        Date.now() -
+          new Date(pay.provider_checked_at || pay.created_at).getTime() >
+          30000
       ) {
         try {
           const q = await queryStk(pay.checkout_request_id);
@@ -1873,10 +2233,15 @@ async function route(req, res) {
             await db
               .from("payments")
               .update({
-                result_code: Number(q.ResultCode),
-                result_description:
+                provider_result_code: Number(q.ResultCode),
+                provider_result_description:
                   q.ResultDesc ||
                   "Daraja query returned; awaiting authenticated callback details.",
+                provider_checked_at: now(),
+                reconciliation_status:
+                  Number(q.ResultCode) === 0
+                    ? "provider_success_pending_proof"
+                    : "provider_pending",
               })
               .eq("id", pay.id)
               .in("status", ["initiated", "pending"]);
@@ -1895,7 +2260,7 @@ async function route(req, res) {
     if (r.status === "paid") {
       ({ data: pp } = await db
         .from("payments")
-        .select("receipt,amount")
+        .select("id,receipt,amount,paid_at")
         .eq("request_id", id)
         .eq("status", "success")
         .order("created_at", { ascending: false })
@@ -1905,9 +2270,272 @@ async function route(req, res) {
     return json(res, 200, {
       status: r.status,
       paperId: r.paper_id,
+      paymentId: (pp && pp.id) || null,
       receipt: (pp && pp.receipt) || null,
       amount: (pp && pp.amount) || r.amount,
+      paidAt: (pp && pp.paid_at) || null,
     });
+  }
+  if (method === "POST" && path === "/api/admin/payments/reconcile") {
+    const u = await requireUser(req, res, "admin");
+    if (!u) return;
+    const body = await bodyJson(req),
+      paymentId = String(body.paymentId || "").trim();
+    let query = db
+      .from("payments")
+      .select("id,checkout_request_id,status,created_at")
+      .in("status", ["initiated", "pending"])
+      .not("checkout_request_id", "is", null)
+      .is("archived_at", null)
+      .order("created_at", { ascending: true })
+      .limit(paymentId ? 1 : 50);
+    if (paymentId) query = query.eq("id", paymentId);
+    const { data: attempts, error } = await query;
+    if (error) throw error;
+    if (paymentId && !attempts?.length)
+      return fail(res, 404, "Pending payment attempt not found.");
+    const results = [];
+    for (const payment of attempts || []) {
+      if (Date.now() - new Date(payment.created_at).getTime() < 10000) {
+        results.push({ id: payment.id, outcome: "too_recent" });
+        continue;
+      }
+      try {
+        const response = await queryStk(payment.checkout_request_id),
+          rawCode = response.ResultCode ?? response.ResponseCode,
+          code =
+            rawCode === undefined || rawCode === null || rawCode === ""
+              ? null
+              : Number(rawCode),
+          description = String(
+            response.ResultDesc ||
+              response.ResponseDescription ||
+              "Daraja query response received; awaiting authenticated callback evidence.",
+          ).slice(0, 500);
+        const { error: updateError } = await db
+          .from("payments")
+          .update({
+            provider_result_code: Number.isFinite(code) ? code : null,
+            provider_result_description: description,
+            provider_checked_at: now(),
+            reconciliation_status:
+              code === 0
+                ? "provider_success_pending_proof"
+                : "provider_pending",
+          })
+          .eq("id", payment.id)
+          .in("status", ["initiated", "pending"]);
+        if (updateError) throw updateError;
+        results.push({
+          id: payment.id,
+          outcome:
+            code === 0
+              ? "provider_response_awaiting_callback"
+              : "provider_checked",
+        });
+      } catch (error) {
+        console.error(
+          "Admin payment reconciliation",
+          payment.id,
+          error?.message,
+        );
+        results.push({ id: payment.id, outcome: "query_error" });
+      }
+    }
+    return json(res, 200, {
+      checked: results.length,
+      results,
+      notice:
+        "Provider query results are recorded for review only; only verified callback or administrator evidence confirms payment.",
+    });
+  }
+  if (method === "POST" && path === "/api/admin/payments/verify") {
+    const u = await requireUser(req, res, "admin");
+    if (!u) return;
+    const b = await bodyJson(req),
+      paymentId = String(b.paymentId || "").trim(),
+      code = String(b.receipt || "")
+        .trim()
+        .toUpperCase(),
+      amount = Number(b.amount),
+      evidence = manualPaymentEvidence(b);
+    if (!paymentId) return fail(res, 400, "Choose a payment to verify.");
+    if (!/^[A-Z0-9]{8,12}$/.test(code))
+      return fail(
+        res,
+        400,
+        "Enter the M-Pesa code shown in transaction evidence.",
+      );
+    if (evidence.error) return fail(res, 400, evidence.error);
+    const { data: pay, error: paymentError } = await db
+      .from("payments")
+      .select("*")
+      .eq("id", paymentId)
+      .maybeSingle();
+    if (paymentError) throw paymentError;
+    if (!pay) return fail(res, 404, "Payment not found.");
+    if (pay.status === "success")
+      return fail(res, 409, "This payment is already confirmed.");
+    if (pay.archived_at)
+      return fail(res, 409, "Restore this payment before verifying it.");
+    if (!Number.isInteger(amount) || amount !== Number(pay.amount))
+      return fail(
+        res,
+        409,
+        "The verified M-Pesa amount must exactly match the requested amount.",
+      );
+    const { data: duplicate, error: duplicateError } = await db
+      .from("payments")
+      .select("id")
+      .eq("receipt", code)
+      .neq("id", pay.id)
+      .limit(1);
+    if (duplicateError) throw duplicateError;
+    if (duplicate?.length)
+      return fail(
+        res,
+        409,
+        "That M-Pesa receipt is already assigned to another payment.",
+      );
+    const service = pay.result_request_id
+      ? { table: "result_requests", id: pay.result_request_id }
+      : pay.refer_request_id
+        ? { table: "refer_requests", id: pay.refer_request_id }
+        : pay.request_id
+          ? { table: "paper_requests", id: pay.request_id }
+          : null;
+    if (!service)
+      return fail(res, 409, "This payment is not linked to a request.");
+    const { data: request, error: requestError } = await db
+      .from(service.table)
+      .select("id,status,payment_status,archived_at")
+      .eq("id", service.id)
+      .maybeSingle();
+    if (requestError) throw requestError;
+    if (!request) return fail(res, 404, "Linked request not found.");
+    if (request.archived_at)
+      return fail(
+        res,
+        409,
+        "Restore the linked request before verifying payment.",
+      );
+    if (
+      request.status === "rejected" ||
+      request.status === "paid" ||
+      request.payment_status === "paid"
+    )
+      return fail(
+        res,
+        409,
+        "The linked request is already paid or cannot be paid.",
+      );
+    const { data: updated, error: updateError } = await db
+      .from("payments")
+      .update({
+        status: "success",
+        receipt: code,
+        paid_phone: evidence.paidPhone,
+        paid_amount: amount,
+        payer_name: evidence.payerName || null,
+        payer_name_source: evidence.payerNameSource,
+        paid_at: evidence.paidAt,
+        paid_at_source: evidence.paidAtSource,
+        confirmation_source: "admin_verified",
+        reconciliation_status: "verified",
+      })
+      .eq("id", pay.id)
+      .in("status", ["initiated", "pending", "review_required", "failed"])
+      .select("*")
+      .maybeSingle();
+    if (updateError?.code === "23505")
+      return fail(
+        res,
+        409,
+        "A successful payment or duplicate receipt already exists for this request.",
+      );
+    if (updateError) throw updateError;
+    if (!updated)
+      return fail(
+        res,
+        409,
+        "Payment status changed; refresh and review it again.",
+      );
+    await markPaid(updated, code, amount);
+    const { error: eventError } = await db.from("payment_events").insert({
+      payment_id: updated.id,
+      result_code: 0,
+      result_description:
+        "Manually verified by administrator against M-Pesa evidence",
+      payload: {
+        source: "admin_verified",
+        actorId: u.id,
+        receipt: code,
+        amount,
+        payerName: evidence.payerName || null,
+        paidPhone: evidence.paidPhone,
+        paidAt: evidence.paidAt,
+        paidAtSource: evidence.paidAtSource,
+      },
+    });
+    if (eventError) throw eventError;
+    await writeAudit({
+      actor_id: u.id,
+      action: "payment.manual_reconciled",
+      entity_type: "payment",
+      entity_id: updated.id,
+      metadata: {
+        serviceType: updated.result_request_id
+          ? "results"
+          : updated.refer_request_id
+            ? "refer"
+            : "paper",
+        receipt: code,
+        amount,
+        payerPhone: evidence.paidPhone,
+        payerName: evidence.payerName || null,
+        paidAt: evidence.paidAt,
+        paidAtSource: evidence.paidAtSource,
+      },
+    });
+    return json(res, 200, { ok: true, payment: mapPayment(updated) });
+  }
+  if (method === "POST" && path === "/api/records/archive") {
+    const u = await requireUser(req, res);
+    if (!u) return;
+    const b = await bodyJson(req),
+      type = String(b.type || ""),
+      action = String(b.action || ""),
+      id = String(b.id || "").trim(),
+      mapping = {
+        paper: { table: "paper_requests", paymentField: "request_id" },
+        results: {
+          table: "result_requests",
+          paymentField: "result_request_id",
+        },
+        refer: { table: "refer_requests", paymentField: "refer_request_id" },
+        payment: { table: "payments" },
+      };
+    if (!mapping[type] || !["archive", "restore"].includes(action) || !id)
+      return fail(res, 400, "Choose a valid record and archive action.");
+    const { data: result, error } = await db.rpc("set_request_archive_state", {
+      p_type: type,
+      p_id: id,
+      p_actor_id: u.id,
+      p_action: action,
+      p_reason: String(b.reason || "").slice(0, 300),
+    });
+    if (error) throw error;
+    if (!result?.ok) {
+      const reason = result?.reason || "unknown";
+      return fail(
+        res,
+        reason === "pending_payment" ? 409 : 404,
+        reason === "pending_payment"
+          ? "This request has a pending payment attempt; reconcile it before archiving."
+          : "Record not found or the archive action is not permitted.",
+      );
+    }
+    return json(res, 200, result);
   }
   if (method === "POST" && path === "/api/admin/papers/update") {
     const u = await requireUser(req, res, "admin");
@@ -1935,7 +2563,7 @@ async function route(req, res) {
         .from("paper_requests")
         .update({ title: p.title })
         .eq("paper_id", data.id);
-    await db.from("audit_logs").insert({
+    await writeAudit({
       actor_id: u.id,
       action: "paper.update",
       entity_type: "paper",
@@ -1963,7 +2591,7 @@ async function route(req, res) {
       .limit(1);
     if (!same?.length)
       await supabase.storage.from(BUCKET).remove([p.storage_path]);
-    await db.from("audit_logs").insert({
+    await writeAudit({
       actor_id: u.id,
       action: "paper.delete",
       entity_type: "paper",
@@ -1984,9 +2612,8 @@ async function route(req, res) {
         .trim()
         .toUpperCase(),
       amount = Number(b.amount),
-      phone = String(b.phone || "")
-        .replace(/\D/g, "")
-        .replace(/^0/, "254");
+      evidence = manualPaymentEvidence(b),
+      phone = evidence.paidPhone;
     if (!["results", "refer"].includes(serviceType))
       return fail(res, 400, "Choose a valid academic service.");
     if (!/^[A-Z0-9]{8,12}$/.test(code))
@@ -1997,19 +2624,16 @@ async function route(req, res) {
         400,
         "Enter the M-Pesa amount shown in the transaction.",
       );
-    if (!/^254\d{9}$/.test(phone))
-      return fail(
-        res,
-        400,
-        "Enter the Kenyan phone number shown in the transaction.",
-      );
+    if (evidence.error) return fail(res, 400, evidence.error);
     const { data: request, error: requestError } = await db
       .from(table)
-      .select("id,user_id,payment_status,service_fee,status")
+      .select("id,user_id,payment_status,service_fee,status,archived_at")
       .eq("id", b.requestId)
       .maybeSingle();
     if (requestError) throw requestError;
     if (!request) return fail(res, 404, "Service request not found.");
+    if (request.archived_at)
+      return fail(res, 409, "Restore this request before recording payment.");
     if (request.status === "rejected")
       return fail(res, 409, "Rejected service requests cannot be paid.");
     if (request.payment_status === "paid")
@@ -2050,6 +2674,12 @@ async function route(req, res) {
         receipt: code,
         paid_phone: phone,
         paid_amount: amount,
+        payer_name: evidence.payerName || null,
+        payer_name_source: evidence.payerNameSource,
+        paid_at: evidence.paidAt,
+        paid_at_source: evidence.paidAtSource,
+        confirmation_source: "admin_verified",
+        reconciliation_status: "verified",
       },
       { data: inserted, error } = await db
         .from("payments")
@@ -2062,9 +2692,27 @@ async function route(req, res) {
         409,
         "That M-Pesa code was already used or this request already has a confirmed payment.",
       );
+    if (error?.code === "23514")
+      return fail(res, 409, "Restore this request before recording payment.");
     if (error) throw error;
     await markPaid(inserted, code, payment.amount);
-    await db.from("audit_logs").insert({
+    const { error: eventError } = await db.from("payment_events").insert({
+      payment_id: inserted.id,
+      result_code: 0,
+      result_description: "Manually verified by administrator",
+      payload: {
+        source: "admin_verified",
+        actorId: u.id,
+        receipt: code,
+        amount,
+        payerName: evidence.payerName || null,
+        paidPhone: phone,
+        paidAt: evidence.paidAt,
+        paidAtSource: evidence.paidAtSource,
+      },
+    });
+    if (eventError) throw eventError;
+    await writeAudit({
       actor_id: u.id,
       action: "service.payment.manual",
       entity_type: table,
@@ -2079,16 +2727,27 @@ async function route(req, res) {
     const b = await bodyJson(req),
       code = String(b.receipt || "")
         .trim()
-        .toUpperCase();
+        .toUpperCase(),
+      evidence = manualPaymentEvidence(b);
     if (!/^[A-Z0-9]{8,12}$/.test(code))
       return fail(res, 400, "Enter the M-Pesa code, for example UJV570GU3H.");
+    if (evidence.error) return fail(res, 400, evidence.error);
     const { data: r } = await db
       .from("paper_requests")
       .select("*")
       .eq("id", b.requestId)
       .maybeSingle();
     if (!r) return fail(res, 404, "Request not found.");
+    if (r.archived_at)
+      return fail(res, 409, "Restore this request before recording payment.");
     if (r.status === "paid") return fail(res, 409, "Already paid.");
+    const amount = Number(b.amount ?? r.amount);
+    if (!Number.isFinite(amount) || amount <= 0 || amount !== Number(r.amount))
+      return fail(
+        res,
+        409,
+        "The recorded M-Pesa amount must exactly match this request amount.",
+      );
     const { data: dup } = await db
       .from("payments")
       .select("id")
@@ -2099,25 +2758,63 @@ async function route(req, res) {
     const pay = {
         request_id: r.id,
         user_id: r.user_id,
-        amount: Number(b.amount || r.amount),
-        phone: String(b.phone || "manual"),
+        amount,
+        phone: evidence.paidPhone,
         status: "success",
         receipt: code,
-        paid_amount: Number(b.amount || r.amount),
+        paid_phone: evidence.paidPhone,
+        paid_amount: amount,
+        payer_name: evidence.payerName || null,
+        payer_name_source: evidence.payerNameSource,
+        paid_at: evidence.paidAt,
+        paid_at_source: evidence.paidAtSource,
+        confirmation_source: "admin_verified",
+        reconciliation_status: "verified",
       },
       { data: ins, error } = await db
         .from("payments")
         .insert(pay)
         .select("*")
         .single();
+    if (error?.code === "23505")
+      return fail(
+        res,
+        409,
+        "A confirmed payment already exists for this request or receipt.",
+      );
+    if (error?.code === "23514")
+      return fail(res, 409, "Restore this request before recording payment.");
     if (error) throw error;
     await markPaid(ins, code, pay.amount);
-    await db.from("audit_logs").insert({
+    const { error: eventError } = await db.from("payment_events").insert({
+      payment_id: ins.id,
+      result_code: 0,
+      result_description: "Manually verified by administrator",
+      payload: {
+        source: "admin_verified",
+        actorId: u.id,
+        receipt: code,
+        amount,
+        payerName: evidence.payerName || null,
+        paidPhone: evidence.paidPhone,
+        paidAt: evidence.paidAt,
+        paidAtSource: evidence.paidAtSource,
+      },
+    });
+    if (eventError) throw eventError;
+    await writeAudit({
       actor_id: u.id,
       action: "payment.manual",
       entity_type: "payment",
       entity_id: ins.id,
-      metadata: { code },
+      metadata: {
+        code,
+        amount,
+        payerName: evidence.payerName || null,
+        paidPhone: evidence.paidPhone,
+        paidAt: evidence.paidAt,
+        paidAtSource: evidence.paidAtSource,
+      },
     });
     return json(res, 200, { ok: true });
   }
@@ -2535,7 +3232,7 @@ async function route(req, res) {
       previous.avatar_path !== storagePath
     )
       await supabase.storage.from(AVATAR_BUCKET).remove([previous.avatar_path]);
-    await db.from("audit_logs").insert({
+    await writeAudit({
       actor_id: u.id,
       action: "profile.avatar_update",
       entity_type: "profile",
@@ -2623,7 +3320,7 @@ async function route(req, res) {
         })
         .eq("id", u.id);
     if (error) throw error;
-    await db.from("audit_logs").insert({
+    await writeAudit({
       actor_id: u.id,
       action: "profile.password_change",
       entity_type: "profile",
@@ -2662,7 +3359,7 @@ async function route(req, res) {
         })
         .eq("id", targetId);
     if (error) throw error;
-    await db.from("audit_logs").insert({
+    await writeAudit({
       actor_id: u.id,
       action: "admin.password_reset",
       entity_type: "profile",
@@ -2705,6 +3402,17 @@ async function route(req, res) {
       .select("*")
       .order("created_at", { ascending: false });
     if (error) throw error;
+    const profileIds = [
+        ...new Set((data || []).map((x) => x.user_id).filter(Boolean)),
+      ],
+      { data: profiles, error: profilesError } = profileIds.length
+        ? await db
+            .from("profiles")
+            .select("id,name,username,email,phone")
+            .in("id", profileIds)
+        : { data: [], error: null };
+    if (profilesError) throw profilesError;
+    const profileById = new Map((profiles || []).map((x) => [x.id, x]));
     res.statusCode = 200;
     res.setHeader("content-type", "text/csv; charset=utf-8");
     res.setHeader(
@@ -2718,7 +3426,7 @@ async function route(req, res) {
     };
     res.end(
       [
-        "id,service_type,request_id,result_request_id,refer_request_id,amount,paid_amount,phone,paid_phone,status,receipt,result_code,result_description,created_at",
+        "id,service_type,request_id,result_request_id,refer_request_id,amount,paid_amount,registered_name,registered_username,registered_email,registered_phone,payer_name,payer_name_source,requested_phone,paid_phone,paid_at,paid_at_source,confirmation_source,reconciliation_status,provider_result_code,provider_result_description,provider_checked_at,status,receipt,result_code,result_description,created_at,archived_at,archive_reason",
         ...(data || []).map((x) =>
           [
             x.id,
@@ -2732,13 +3440,28 @@ async function route(req, res) {
             x.refer_request_id || "",
             x.amount,
             x.paid_amount ?? "",
-            x.phone,
+            profileById.get(x.user_id)?.name || "",
+            profileById.get(x.user_id)?.username || "",
+            profileById.get(x.user_id)?.email || "",
+            profileById.get(x.user_id)?.phone || "",
+            x.payer_name || "",
+            x.payer_name_source || "unavailable",
+            x.phone || "",
             x.paid_phone || "",
+            x.paid_at || "",
+            x.paid_at_source || "unknown",
+            x.confirmation_source || "legacy",
+            x.reconciliation_status || "not_checked",
+            x.provider_result_code ?? "",
+            x.provider_result_description || "",
+            x.provider_checked_at || "",
             x.status,
             x.receipt || "",
             x.result_code ?? "",
             x.result_description || "",
             x.created_at,
+            x.archived_at || "",
+            x.archive_reason || "",
           ]
             .map(csvCell)
             .join(","),
@@ -2759,7 +3482,7 @@ async function route(req, res) {
       .maybeSingle();
     if (error) throw error;
     if (!data) return fail(res, 404, "Paper not found.");
-    await db.from("audit_logs").insert({
+    await writeAudit({
       actor_id: u.id,
       action: "paper.archive",
       entity_type: "paper",
@@ -2879,7 +3602,7 @@ async function route(req, res) {
       .maybeSingle();
     if (error) throw error;
     if (!data) return fail(res, 404, "Request not found.");
-    await db.from("audit_logs").insert({
+    await writeAudit({
       actor_id: u.id,
       action: "request.status",
       entity_type: "paper_request",
